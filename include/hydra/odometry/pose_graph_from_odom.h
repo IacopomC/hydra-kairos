@@ -1,0 +1,83 @@
+/* -----------------------------------------------------------------------------
+ * Copyright 2022 Massachusetts Institute of Technology.
+ * All Rights Reserved
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *
+ *  2. Redistributions in binary form must reproduce the above copyright notice,
+ *     this list of conditions and the following disclaimer in the documentation
+ *     and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Research was sponsored by the United States Air Force Research Laboratory and
+ * the United States Air Force Artificial Intelligence Accelerator and was
+ * accomplished under Cooperative Agreement Number FA8750-19-2-1000. The views
+ * and conclusions contained in this document are those of the authors and should
+ * not be interpreted as representing the official policies, either expressed or
+ * implied, of the United States Air Force or the U.S. Government. The U.S.
+ * Government is authorized to reproduce and distribute reprints for Government
+ * purposes notwithstanding any copyright notation herein.
+ * -------------------------------------------------------------------------- */
+#pragma once
+#include <hydra/odometry/pose_graph_tracker.h>
+#include <chrono>
+
+/**
+ * @file pose_graph_from_odom.h
+ * @brief Pose-graph tracker that builds odometry edges directly from incoming
+ *        body poses, emitting a new node only once the pose has moved far enough
+ *        in space and time since the last accepted one.
+ */
+
+namespace hydra {
+
+/// @brief A body pose tagged with its timestamp.
+struct StampedPose {
+  std::chrono::nanoseconds stamp;  ///< Pose timestamp.
+  Eigen::Isometry3d pose;          ///< Body pose in the world frame.
+};
+
+/// @brief Tracker that emits a single odometry edge between successive accepted poses.
+class PoseGraphFromOdom : public PoseGraphTracker {
+ public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  struct Config {
+    double min_pose_separation = 0.5;  ///< Minimum weighted pose change to add a new node (m).
+    double rotation_separation_weight = 0.1;  ///< Weight on rotation (Frobenius) norm relative to translation (L2) norm.
+    double min_time_separation_s = 0.2;  ///< Minimum elapsed time to add a new node (s).
+  } const config;
+
+  explicit PoseGraphFromOdom(const Config& config);
+
+  ~PoseGraphFromOdom() = default;
+
+  /// @brief Add the pose if it clears the time and separation thresholds, returning the edge to the previous node.
+  /// @param timestamp_ns Pose timestamp (ns).
+  /// @param world_T_body Body pose in the world frame.
+  /// @return Packet with one two-node pose graph, or empty if the pose was dropped.
+  PoseGraphPacket update(uint64_t timestamp_ns,
+                         const Eigen::Isometry3d& world_T_body) override;
+
+ protected:
+  size_t num_poses_received_;  ///< Count of poses accepted so far; also the next node index.
+  StampedPose prev_pose_;      ///< Last accepted pose, the source end of the next edge.
+};
+
+void declare_config(PoseGraphFromOdom::Config& config);
+
+}  // namespace hydra
