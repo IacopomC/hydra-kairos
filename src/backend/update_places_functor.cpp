@@ -54,54 +54,25 @@ void declare_config(UpdatePlacesFunctor::Config& config) {
   name("UpdatePlacesFunctor::Config");
   field(config.pos_threshold_m, "pos_threshold_m", "m");
   field(config.distance_tolerance_m, "distance_tolerance_m", "m");
-  field(config.num_control_points, "num_control_points");
-  field(config.control_point_tolerance_s, "control_point_tolerance_s", "s");
-  field(config.full_merge_every_n_updates, "full_merge_every_n_updates");
+  field(config.deformation_interpolator, "deformation_interpolator");
   field(config.merge_proposer, "merge_proposer");
-}
-
-// Adapter that exposes a list of place-node attributes through the kimera_pgmo
-// vertex traits below, so place positions can be fed straight into the
-// deformation interpolation as if they were mesh vertices.
-struct AttributeMap {
-  std::vector<NodeAttributes*> attributes;
-
-  void push_back(NodeAttributes* attrs) { attributes.push_back(attrs); }
-
-  void sort() {
-    std::sort(
-        attributes.begin(), attributes.end(), [](const auto& lhs, const auto& rhs) {
-          return lhs->last_update_time_ns < rhs->last_update_time_ns;
-        });
-  }
-};
-
-size_t pgmoNumVertices(const AttributeMap& map) { return map.attributes.size(); }
-
-kimera_pgmo::traits::Pos pgmoGetVertex(const AttributeMap& map,
-                                       size_t i,
-                                       kimera_pgmo::traits::VertexTraits* traits) {
-  const auto& attrs = map.attributes[i];
-  if (traits) {
-    traits->stamp = attrs->last_update_time_ns;
-  }
-
-  return attrs->position.cast<float>();
-}
-
-uint64_t pgmoGetVertexStamp(const AttributeMap& map, size_t i) {
-  return map.attributes[i]->last_update_time_ns;
-}
-
-void pgmoSetVertex(AttributeMap& map,
-                   size_t i,
-                   const kimera_pgmo::traits::Pos& pos,
-                   const kimera_pgmo::traits::VertexTraits&) {
-  map.attributes[i]->position = pos.cast<double>();
+  field(config.layer, "layer");
+  field(config.full_merge_every_n_updates, "full_merge_every_n_updates");
 }
 
 UpdatePlacesFunctor::UpdatePlacesFunctor(const Config& config)
-    : config(config::checkValid(config)), merge_proposer(config.merge_proposer) {}
+    : config(config::checkValid(config)),
+      merge_proposer(config.merge_proposer),
+      deformation_interpolator(config.deformation_interpolator) {}
+
+UpdateFunctor::Hooks UpdatePlacesFunctor::hooks() const {
+  auto my_hooks = UpdateFunctor::hooks();
+  my_hooks.find_merges = [this](const auto& graph, const auto& info) {
+    return findMerges(graph, info);
+  };
+
+  return my_hooks;
+}
 
 // drops any isolated place nodes that would cause an inderminate system error
 void UpdatePlacesFunctor::filterMissing(DynamicSceneGraph& graph,
@@ -120,7 +91,7 @@ void UpdatePlacesFunctor::filterMissing(DynamicSceneGraph& graph,
 
     const auto& node = graph.getNode(node_id);
     if (!node.attributes().is_active && !node.hasSiblings()) {
-      VLOG(2) << "[Places Layer]: removing node " << NodeSymbol(node_id).getLabel();
+      VLOG(2) << "[Places Layer]: removing node " << NodeSymbol(node_id).str();
       graph.removeNode(node_id);
     }
   }
@@ -136,119 +107,29 @@ size_t UpdatePlacesFunctor::updateFromValues(const LayerView& view,
   size_t num_changed = 0;
   const auto& places_values = *info->places_values;
   for (const auto& node : view) {
-    ++num_changed;
-    auto& attrs = node.attributes<PlaceNodeAttributes>();
     if (!places_values.exists(node.id)) {
-      VLOG(10) << "[Hydra Backend] missing place " << NodeSymbol(node.id).getLabel()
-               << " from places factors.";
       // this happens for the GT version
+      VLOG(10) << "[Hydra Backend] missing place " << NodeSymbol(node.id).str()
+               << " from places factors.";
       continue;
     }
 
-    // Take the optimized position directly from the solved place factor.
-    // TODO: consider updating distance via parents + deformation graph
+    // TODO(nathan) consider updating distance via parents + deformation graph
+    ++num_changed;
+    auto& attrs = node.attributes();
     attrs.position = places_values.at<gtsam::Pose3>(node.id).translation();
-    auto attrs_clone = attrs.clone();
-    // Preserve backend-side metadata (e.g. flow_* written by FlowTemporalModule)
-    // that doesn't exist in the unmerged frontend graph we're cloning from.
-    if (dsg.graph->hasNode(node.id)) {
-      const auto& backend_meta = dsg.graph->getNode(node.id).attributes().metadata;
-      if (backend_meta.is_object() && !backend_meta.empty()) {
-        attrs_clone->metadata = backend_meta;
-      }
+
+    // Only the position is owned by the optimization: replacing the whole attributes
+    // would drop anything other functors stored on the merged node (e.g., metadata)
+    auto node_ptr = dsg.graph->findNode(node.id);
+    if (node_ptr) {
+      node_ptr->attributes().position = attrs.position;
     }
-    dsg.graph->setNodeAttributes(node.id, std::move(attrs_clone));
   }
 
-  // TODO: fix this
+  // TODO(nathan) fix this
   // filterMissing(*dsg.graph, missing_nodes);
   return num_changed;
-}
-
-size_t UpdatePlacesFunctor::interpFromValues(const LayerView& view,
-                                             SharedDsgInfo& dsg,
-                                             const UpdateInfo::ConstPtr& info) const {
-  if (!info->deformation_graph) {
-    return 0;
-  }
-
-  const auto this_robot = GlobalInfo::instance().getRobotPrefix().id;
-
-  // Group place attributes by the robot whose trajectory control points should
-  // deform them; each robot has its own deformation-graph vertex prefix.
-  std::map<char, AttributeMap> nodes;
-  for (const auto& node : view) {
-    size_t robot_id = this_robot;
-    if (info->node_to_robot_id) {
-      auto iter = info->node_to_robot_id->find(node.id);
-      if (iter == info->node_to_robot_id->end()) {
-        LOG(WARNING) << "Node " << NodeSymbol(node.id) << " does not belong to robot";
-      } else {
-        robot_id = iter->second;
-      }
-    }
-
-    const auto prefix = kimera_pgmo::GetVertexPrefix(robot_id);
-    auto robot_attrs = nodes.find(prefix);
-    if (robot_attrs == nodes.end()) {
-      robot_attrs = nodes.emplace(prefix, AttributeMap{}).first;
-    }
-
-    auto& attrs = node.attributes();
-    auto cache_iter = cached_pos_.find(node.id);
-    if (cache_iter == cached_pos_.end()) {
-      cache_iter = cached_pos_.emplace(node.id, attrs.position).first;
-    } else if (attrs.is_active) {
-      // update cache if node is still active
-      cache_iter->second = attrs.position;
-    }
-
-    // set the position of the node to the original position before deformation
-    attrs.position = cache_iter->second;
-    robot_attrs->second.push_back(&attrs);
-  }
-
-  // For each robot, interpolate the place positions from the optimized
-  // trajectory control points (skipping prefixes without enough control points).
-  auto& dgraph = *info->deformation_graph;
-  for (auto& [prefix, attributes] : nodes) {
-    if (!dgraph.hasVertexKey(prefix)) {
-      continue;
-    }
-
-    const auto& control_points = dgraph.getInitialPositionsVertices(prefix);
-    if (control_points.size() < config.num_control_points) {
-      continue;
-    }
-
-    attributes.sort(); // make sure attributes are sorted by timestamp
-    std::vector<std::set<size_t>> vertex_graph_map_deformed;
-    kimera_pgmo::deformation::deformPoints(attributes,
-                                           vertex_graph_map_deformed,
-                                           attributes,
-                                           prefix,
-                                           control_points,
-                                           dgraph.getVertexStamps(prefix),
-                                           dgraph.getGtsamValues(),
-                                           config.num_control_points,
-                                           config.control_point_tolerance_s,
-                                           nullptr);
-  }
-
-  // Write the now-deformed attributes into the published graph, preserving any
-  // backend-only metadata already present on the published node.
-  for (const auto& node : view) {
-    auto attrs_clone = node.attributes().clone();
-    if (dsg.graph->hasNode(node.id)) {
-      const auto& backend_meta = dsg.graph->getNode(node.id).attributes().metadata;
-      if (backend_meta.is_object() && !backend_meta.empty()) {
-        attrs_clone->metadata = backend_meta;
-      }
-    }
-    dsg.graph->setNodeAttributes(node.id, std::move(attrs_clone));
-  }
-
-  return 0;
 }
 
 void UpdatePlacesFunctor::call(const DynamicSceneGraph& unmerged,
@@ -256,41 +137,25 @@ void UpdatePlacesFunctor::call(const DynamicSceneGraph& unmerged,
                                const UpdateInfo::ConstPtr& info) const {
   ScopedTimer spin_timer("backend/update_places", info->timestamp_ns);
 
-  if (!unmerged.hasLayer(DsgLayers::PLACES)) {
+  if (!unmerged.hasLayer(config.layer)) {
     return;
   }
 
-  const auto new_loopclosure = info->loop_closure_detected;
-  const auto& places = unmerged.getLayer(DsgLayers::PLACES);
-  active_tracker.clear();  // reset from previous pass
-  const auto view = new_loopclosure ? LayerView(places) : active_tracker.view(places);
-
-  // Schedule a full-layer merge pass on a fixed cadence. The flag holds for every
-  // findMerges call of this update (including the fixed-point re-runs) and is
-  // re-evaluated on the next call.
+  // the schedule holds for every findMerges call of this update
   full_merge_pending_ = config.full_merge_every_n_updates > 0 &&
                         ++updates_since_full_merge_ >= config.full_merge_every_n_updates;
   if (full_merge_pending_) {
     updates_since_full_merge_ = 0;
   }
 
-  // Two ways to correct place positions: if places were added as their own
-  // factors we read solved values directly; otherwise we interpolate them from
-  // the trajectory deformation graph and prune cache entries for vanished nodes.
+  const auto new_loopclosure = info->loop_closure_detected;
+  const auto& places = unmerged.getLayer(config.layer);
+  active_tracker.clear();  // reset from previous pass
+  const auto view = new_loopclosure ? LayerView(places) : active_tracker.view(places);
+
   size_t num_changed = 0;
   if (!info->places_values || info->places_values->size() == 0) {
-    num_changed = interpFromValues(view, dsg, info);
-
-    std::vector<NodeId> to_remove;
-    for (const auto& [node_id, pos] : cached_pos_) {
-      if (!unmerged.hasNode(node_id)) {
-        to_remove.push_back(node_id);
-      }
-    }
-
-    for (const auto& node_id : to_remove) {
-      cached_pos_.erase(node_id);
-    }
+    deformation_interpolator.interpolateNodePositions(unmerged, *dsg.graph, info, view);
   } else {
     num_changed = updateFromValues(view, dsg, info);
   }
@@ -301,32 +166,35 @@ void UpdatePlacesFunctor::call(const DynamicSceneGraph& unmerged,
 MergeList UpdatePlacesFunctor::findMerges(const DynamicSceneGraph& graph,
                                           const UpdateInfo::ConstPtr& info) const {
   const auto new_lcd = info->loop_closure_detected;
-  const auto& places = graph.getLayer(DsgLayers::PLACES);
-  // freeze layer view to avoid messing with tracker; a full-layer pass also lets
-  // archived places merge with each other (they are never active-view sources)
-  const auto view = (new_lcd || full_merge_pending_)
-                        ? LayerView(places)
-                        : active_tracker.view(places, true);
+  const auto& places = graph.getLayer(config.layer);
+  // freeze layer view to avoid messing with tracker
+  const auto view = (new_lcd || full_merge_pending_) ? LayerView(places)
+                                                     : active_tracker.view(places, true);
 
   MergeList proposals;
   merge_proposer.findMerges(
       places,
       view,
-      // Merge two real places only when they are both close in position and
-      // have similar free-space radii (their distance-to-obstacle values agree).
       [this](const SceneGraphNode& lhs, const SceneGraphNode& rhs) {
-        const auto& lhs_attrs = lhs.attributes<PlaceNodeAttributes>();
-        const auto& rhs_attrs = rhs.attributes<PlaceNodeAttributes>();
-        if (!lhs_attrs.real_place || !rhs_attrs.real_place) {
+        const auto lhs_attrs = lhs.tryAttributes<PlaceNodeAttributes>();
+        const auto rhs_attrs = rhs.tryAttributes<PlaceNodeAttributes>();
+        if (!lhs_attrs || !rhs_attrs) {
+          LOG(WARNING) << "Invalid place nodes: " << NodeSymbol(lhs.id).str() << ", "
+                       << NodeSymbol(rhs.id).str();
           return false;
         }
 
-        const auto distance = (lhs_attrs.position - rhs_attrs.position).norm();
+        if (!lhs_attrs->real_place || !rhs_attrs->real_place) {
+          return false;
+        }
+
+        const auto distance = (lhs_attrs->position - rhs_attrs->position).norm();
         if (distance > config.pos_threshold_m) {
           return false;
         }
 
-        const auto radii_deviation = std::abs(lhs_attrs.distance - rhs_attrs.distance);
+        const auto radii_deviation =
+            std::abs(lhs_attrs->distance - rhs_attrs->distance);
         return radii_deviation <= config.distance_tolerance_m;
       },
       proposals);

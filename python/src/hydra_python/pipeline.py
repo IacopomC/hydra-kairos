@@ -33,13 +33,20 @@
 #
 #
 """Module containing python utilites for loading a valid config."""
+
 import logging
 import pathlib
 import pprint
 
 import yaml
 
-from hydra_python._hydra_bindings import HydraPipeline, set_glog_dir
+from hydra_python._hydra_bindings import (
+    Camera,
+    CameraConfig,
+    ExtrinsicsConfig,
+    HydraPipeline,
+    set_glog_dir,
+)
 
 
 def get_config_path(dataset=None):
@@ -72,9 +79,8 @@ def update_nested(contents, other):
 def load_configs(
     dataset: str,
     labelspace: str = "ade20k_mp3d",
+    config_path=None,
     bounding_box_type: str = "AABB",
-    lcd_config: str = None,
-    enable_lcd: bool = True,
 ):
     """
     Load various configs to construct the Hydra pipeline.
@@ -82,25 +88,15 @@ def load_configs(
     dataset_name: Dataset name to load config from
     labelspace_name: Labelspace name to use
     bounding_box_type: Type of bounding box to use
-    lcd_config: Name of the LCD config under config/lcd/<name>.yaml. When
-        None (default), auto-selects: if config/lcd/<dataset>.yaml exists
-        we use it (so `-c tbd` picks `lcd/tbd.yaml`, matching the
-        uhumans2 / uhumans2_gnn pattern); otherwise falls back to "default".
-        Loaded only when enable_lcd is True and the resolved file exists.
-    enable_lcd: Whether the loop-closure module should be constructed and
-        run. When True, lcd_use_bow_vectors is left at its C++ default (true)
-        so PipelineQueues::bow_queue is allocated and the offline BoW producer
-        (hydra_python.bow_producer) can feed agent-layer LCD;
-        enable_agent_registration is forced True so the python binding
-        registers a BowAgentSolver at level 0 (substituting for the ROS
-        DsgAgentSolver). When False, no LCD config is merged and the
-        baseline `enable_lcd: false` default applies, leaving the dataset
-        YAML in control of any non-LCD lcd_* fields.
 
     Returns:
         (Optional[PythonConfig]) Pipline config or none if invalid
     """
-    config_path = get_config_path()
+    config_path = (
+        get_config_path()
+        if config_path is None
+        else pathlib.Path(config_path).resolve()
+    )
     dataset_path = config_path / "datasets" / f"{dataset}.yaml"
     labelspace_path = config_path / "label_spaces" / f"{labelspace}_label_space.yaml"
     if not dataset_path.exists():
@@ -118,27 +114,6 @@ def load_configs(
     with labelspace_path.open("r") as fin:
         update_nested(contents, yaml.safe_load(fin.read()))
 
-    # Merge the LCD config so LoopClosureConfig has the detector / search /
-    # registration sub-blocks available. Must happen BEFORE HydraPipeline
-    # construction: PipelineQueues only allocates `lcd_queue` when
-    # GlobalInfo.config.enable_lcd was true at first dereference, and the
-    # frontend's LcdInput producer is registered based on that queue's
-    # existence. Setting enable_lcd later is a silent no-op.
-    if enable_lcd:
-        # Auto-select dataset-specific LCD config when caller didn't pin one.
-        if lcd_config is None:
-            candidate = config_path / "lcd" / f"{dataset}.yaml"
-            lcd_config = dataset if candidate.exists() else "default"
-            logging.info(
-                "[hydra_python] auto-selected lcd config '%s' for dataset '%s'",
-                lcd_config,
-                dataset,
-            )
-        lcd_path = config_path / "lcd" / f"{lcd_config}.yaml"
-        if lcd_path.exists():
-            with lcd_path.open("r") as fin:
-                update_nested(contents, yaml.safe_load(fin.read()))
-
     overrides = {
         "frontend": {
             "type": "GraphBuilder",
@@ -150,36 +125,50 @@ def load_configs(
             "show_stats": False,
             "pose_graphs": {"make_pose_graph": True},
         },
-        "enable_lcd": bool(enable_lcd),
+        "lcd": {"lcd_use_bow_vectors": False},
     }
-    if enable_lcd:
-        overrides["lcd"] = {
-            # The python binding registers BowAgentSolver at level 0
-            # (python_pipeline.cpp::initModules) when this flag is true, so
-            # agent-LCD short-circuits the cascade before places-LCD runs.
-            # lcd_use_bow_vectors is left at the C++ default (true) so
-            # bow_queue is allocated for the offline DBoW producer in
-            # hydra_python.bow_producer.
-            "enable_agent_registration": True,
-        }
     update_nested(contents, overrides)
     return contents
 
 
+def make_camera(
+    fx,
+    fy,
+    cx,
+    cy,
+    width,
+    height,
+    min_range=0.1,
+    max_range=5.0,
+    name="camera",
+    extrinsics=None,
+):
+    config = CameraConfig()
+    config.min_range = min_range
+    config.max_range = max_range
+    config.width = width
+    config.height = height
+    config.fx = fx
+    config.fy = fy
+    config.cx = cx
+    config.cy = cy
+    config.extrinsics = ExtrinsicsConfig() if extrinsics is None else extrinsics
+    return Camera(config, name)
+
+
 def load_pipeline(
-    data,
+    sensor,
     config_name,
     labelspace,
+    config_path=None,
     output_path=None,
     config_verbosity=0,
     place_feature_strategy=None,
+    freeze_global_info=True,
     zmq_url=None,
-    enable_lcd=True,
 ):
     """Load Hydra pipeline from configs."""
-    contents = load_configs(
-        config_name, labelspace=labelspace, enable_lcd=enable_lcd
-    )
+    contents = load_configs(config_name, labelspace=labelspace, config_path=config_path)
     if not contents:
         return None
 
@@ -204,10 +193,11 @@ def load_pipeline(
     logging.debug(pprint.pformat(contents, sort_dicts=False))
     pipeline = HydraPipeline.from_config(
         yaml.safe_dump(contents),
-        data.sensor,
+        sensor,
         robot_id=0,
         config_verbosity=config_verbosity,
-        zmq_url="" if zmq_url is None else zmq_url
+        use_step_mode=True,
+        zmq_url="" if zmq_url is None else zmq_url,
     )
 
     return pipeline

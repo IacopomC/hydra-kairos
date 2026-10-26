@@ -34,13 +34,6 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file lidar.h
- * @brief LiDAR sensor model: maps points to a spherical (azimuth/elevation)
- *        range image, builds the range image from a point cloud, and tests the
- *        view frustum. Specializes the Sensor interface.
- */
-
 #include <vector>
 
 #include "hydra/input/input_data.h"
@@ -48,11 +41,12 @@
 
 namespace hydra {
 
-/// @brief LiDAR sensor: a spherical projection model defined by angular
-/// resolution and field of view.
-///
-/// Based on the LiDAR sensor model from voxblox:
-/// https://github.com/ethz-asl/voxblox/blob/dynablox/release/voxblox/include/voxblox/integrator/projective_tsdf_integrator_inl.h
+/**
+ * @brief Utility class bundling lidar related operations and data
+ *
+ * Based on LIDAR sensor model found here:
+ * https://github.com/ethz-asl/voxblox/blob/dynablox/release/voxblox/include/voxblox/integrator/projective_tsdf_integrator_inl.h
+ */
 class Lidar : public Sensor {
  public:
   // Note: negative parameters are REQUIRED
@@ -75,14 +69,15 @@ class Lidar : public Sensor {
 
   virtual ~Lidar() = default;
 
-  /// @brief This LiDAR's configuration.
   const Config& getConfig() const { return config_; }
 
   float getPointDepth(const Eigen::Vector3f& p) const override;
 
   float computeRayDensity(float voxel_size, float depth) const override;
 
-  /// @brief Build the range image from the input point cloud.
+  /**
+   * @brief Compute range image from pointcloud
+   */
   bool finalizeRepresentations(InputData& input,
                                bool force_world_frame = false) const override;
 

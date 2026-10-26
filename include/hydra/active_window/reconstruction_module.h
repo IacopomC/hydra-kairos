@@ -41,49 +41,38 @@
 #include "hydra/reconstruction/mesh_integrator_config.h"
 #include "hydra/reconstruction/projective_integrator.h"
 
-/**
- * @file reconstruction_module.h
- * @brief Active-window subclass that reconstructs the volumetric map: it fuses
- *        each frame's depth/semantics into the TSDF, meshes the dirty blocks,
- *        and integrates the robot footprint into free space.
- */
-
 namespace hydra {
 
 class ProjectiveIntegrator;
 class MeshIntegrator;
 class RobotFootprintIntegrator;
 
-/// @brief Active-window module that runs TSDF, mesh, and footprint integration per frame.
 class ReconstructionModule : public ActiveWindowModule {
  public:
   struct Config : ActiveWindowModule::Config {
-    double full_update_separation_s = 0.0;  ///< Minimum time between full map updates (s); 0 updates every frame.
-    ProjectiveIntegrator::Config tsdf;  ///< TSDF projective-integrator configuration.
-    MeshIntegratorConfig mesh;  ///< Mesh-integrator configuration.
-    config::VirtualConfig<RobotFootprintIntegrator> robot_footprint;  ///< Optional robot-footprint integrator.
+    double full_update_separation_s = 0.0;
+    ProjectiveIntegrator::Config tsdf;
+    MeshIntegratorConfig mesh;
+    config::VirtualConfig<RobotFootprintIntegrator> robot_footprint;
   } const config;
 
   ReconstructionModule(const Config& config, const OutputQueue::Ptr& output_queue);
 
   virtual ~ReconstructionModule();
 
-  /// @brief Return a human-readable summary of module state.
   std::string printInfo() const override;
 
  protected:
-  /// @brief Whether a full update is due at this timestamp per full_update_separation_s.
   bool shouldUpdate(uint64_t timestamp_ns) const;
 
-  /// @brief Integrate one input frame into the map and emit the active-window output.
   ActiveWindowOutput::Ptr spinOnce(const InputPacket& input) override;
 
  protected:
-  std::optional<uint64_t> last_update_ns_;  ///< Timestamp of the last full update.
+  std::optional<uint64_t> last_update_ns_;
 
-  std::unique_ptr<ProjectiveIntegrator> tsdf_integrator_;  ///< Fuses depth/semantics into the TSDF.
-  std::unique_ptr<MeshIntegrator> mesh_integrator_;  ///< Builds the surface mesh from the TSDF.
-  std::unique_ptr<RobotFootprintIntegrator> footprint_integrator_;  ///< Carves the robot footprint into free space.
+  std::unique_ptr<ProjectiveIntegrator> tsdf_integrator_;
+  std::unique_ptr<MeshIntegrator> mesh_integrator_;
+  std::unique_ptr<RobotFootprintIntegrator> footprint_integrator_;
 };
 
 void declare_config(ReconstructionModule::Config& config);

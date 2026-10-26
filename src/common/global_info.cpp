@@ -35,9 +35,9 @@
 #include "hydra/common/global_info.h"
 
 #include <config_utilities/config.h>
-#include <config_utilities/parsing/yaml.h>
 #include <config_utilities/printing.h>
 #include <config_utilities/validation.h>
+#include <spark_dsg/labelspace.h>
 
 #include <filesystem>
 #include <fstream>
@@ -73,8 +73,6 @@ struct LabelNameConversion {
                                SourceMap& value,
                                std::string& error) {
     value.clear();
-    // each list entry must carry both a numeric label and its human-readable name;
-    // bail on the first malformed entry rather than partially populating the map
     for (const auto& value_map : other) {
       if (!value_map.count("name")) {
         error = "invalid format! missing key 'name'";
@@ -91,6 +89,14 @@ struct LabelNameConversion {
   }
 };
 
+void declare_config(MeshFieldConfig& config) {
+  using namespace config;
+  name("MeshFieldConfgi");
+  field(config.with_colors, "with_colors");
+  field(config.with_first_seen_stamps, "with_first_seen_stamps");
+  field(config.with_labels, "with_labels");
+}
+
 void declare_config(FrameConfig& frames) {
   using namespace config;
   name("FrameConfig");
@@ -102,36 +108,23 @@ void declare_config(FrameConfig& frames) {
 void declare_config(PipelineConfig& config) {
   using namespace config;
   name("PipelineConfig");
-  field(config.enable_reconstruction, "enable_reconstruction");
   field(config.enable_lcd, "enable_lcd");
-  field(config.enable_places, "enable_places");
   field(config.timing_disabled, "timing_disabled");
   field(config.disable_timer_output, "disable_timer_output");
   field(config.enable_pgmo_logging, "enable_pgmo_logging");
   field(config.default_verbosity, "default_verbosity");
   field(config.default_num_threads, "default_num_threads");
   field(config.store_visualization_details, "store_visualization_details");
-  field<LayerMapConversion<char>>(config.layer_id_map, "layer_id_map");
   config.map_window.setOptional();
   field(config.map_window, "map_window");
   field<LabelNameConversion>(config.label_names, "label_names");
 
   // the following subconfigs should not be namespaced
-  field(config.logs, "logs", false);
   field(config.frames, "frames", false);
+  field(config.graph, "graph", false);
   field(config.label_space, "label_space", false);
-}
 
-void saveTimingInformation(const LogSetup& log_config) {
-  if (!log_config.valid()) {
-    return;
-  }
-
-  LOG(INFO) << "[Hydra] saving timing information to " << log_config.getLogDir();
-  const ElapsedTimeRecorder& timer = ElapsedTimeRecorder::instance();
-  timer.logAllElapsed(log_config);
-  timer.logStats(log_config.getTimerFilepath());
-  LOG(INFO) << "[Hydra] saved timing information";
+  field(config.mesh, "mesh");
 }
 
 GlobalInfo::GlobalInfo() : force_shutdown_(false) {}
@@ -140,49 +133,18 @@ void GlobalInfo::configureTimers() {
   ElapsedTimeRecorder& timer = ElapsedTimeRecorder::instance();
   timer.timing_disabled = config_.timing_disabled;
   timer.disable_output = config_.disable_timer_output;
-  // nothing else to wire up if timing is off entirely
-  if (timer.timing_disabled) {
-    return;
-  }
-
-  // incremental logging needs a valid log destination to stream to
-  if (!logs_ || !logs_->valid()) {
-    return;
-  }
-
-  if (logs_->config().log_timing_incrementally) {
-    timer.setupIncrementalLogging(logs_);
-  }
-}
-
-void GlobalInfo::checkFrozen() const {
-  if (!frozen_) {
-    LOG(ERROR) << "GlobalInfo is not frozen! Call init with freeze set to 'true' "
-                  "before using config";
-    throw std::runtime_error("config not frozen");
-  }
 }
 
 void GlobalInfo::initFromConfig(const PipelineConfig& config, int robot_id) {
-  // validate and store the config before deriving any dependent state from it
   config_ = config::checkValid(config);
-  VLOG(5) << "Loading from config: " << config::toString(config);
-  // derive the robot's graph-key prefixes from its numeric id
   robot_prefix_ = RobotPrefixConfig(robot_id);
-  logs_ = std::make_shared<LogSetup>(config_.logs);
-  if (!logs_->valid()) {
-    // delete logs if they don't point to a valid path
-    logs_.reset();
-  }
 
-  // timers depend on the log setup resolved above
   configureTimers();
 
   if (!config_.label_space.label_remap_filepath.empty()) {
     label_remapper_ = LabelRemapper(config_.label_space.label_remap_filepath);
   }
 
-  // load the label-to-color table used for semantic visualization, if provided
   if (!config_.label_space.colormap_filepath.empty()) {
     label_colormap_ = SemanticColorMap::fromCsv(config_.label_space.colormap_filepath);
   }
@@ -191,64 +153,26 @@ void GlobalInfo::initFromConfig(const PipelineConfig& config, int robot_id) {
     VLOG(2) << "Loaded label space colors:" << std::endl << *label_colormap_;
   }
 
-  if (!config_.label_space.label_remap_filepath.empty()) {
-    label_remapper_ = LabelRemapper(config_.label_space.label_remap_filepath);
-  }
-
   if (config_.enable_pgmo_logging) {
     logging::Logger::addSink("glog", std::make_shared<PgmoGlogSink>());
   }
 }
 
 GlobalInfo& GlobalInfo::instance() {
-  // lazily construct the singleton on first access
   if (!instance_) {
     instance_.reset(new GlobalInfo());
   }
+
   return *instance_;
 }
 
-GlobalInfo& GlobalInfo::init(const PipelineConfig& config, int robot_id, bool freeze) {
+GlobalInfo& GlobalInfo::init(const PipelineConfig& config, int robot_id) {
   auto& curr = instance();
-  // once frozen the config is treated as immutable; reject re-initialization
-  if (curr.frozen_) {
-    LOG(ERROR) << "Failed to initialize GlobalInfo as config was already frozen";
-    throw std::runtime_error("hydra global config is frozen");
-  }
-
   curr.initFromConfig(config, robot_id);
-  // TODO: print?
-  // freeze after a successful load so later reads can assert the config is final
-  curr.frozen_ = freeze;
   return curr;
 }
 
 void GlobalInfo::reset() { instance_.reset(new GlobalInfo()); }
-
-void GlobalInfo::exit() {
-  auto& curr = instance();
-
-  // save timing information to avoid destructor weirdness with singletons
-  if (curr.logs_) {
-    saveTimingInformation(*curr.logs_);
-
-    // serialize the resolved config plus each registered sensor's calibration
-    // so the run is fully reproducible from the log directory
-    auto node = config::toYaml(curr.config_);
-    for (const auto& [name, sensor] : curr.sensors_) {
-      node["sensors"][name] = sensor->dump();
-    }
-
-    std::filesystem::path log_dir = curr.logs_->getLogDir();
-    std::ofstream fout(log_dir / "hydra_config.yaml");
-    fout << node;
-
-    // release the log handle now so timing is flushed before teardown
-    curr.logs_.reset();
-  }
-
-  // TODO: see if anything else needs to be saved;
-}
 
 void GlobalInfo::setForceShutdown(bool force_shutdown) {
   force_shutdown_ = force_shutdown;
@@ -261,8 +185,6 @@ const PipelineConfig& GlobalInfo::getConfig() const { return config_; }
 const FrameConfig& GlobalInfo::getFrames() const { return config_.frames; }
 
 const RobotPrefixConfig& GlobalInfo::getRobotPrefix() const { return robot_prefix_; }
-
-const LogSetup::Ptr& GlobalInfo::getLogs() const { return logs_; }
 
 const std::map<uint32_t, std::string>& GlobalInfo::getLabelToNameMap() const {
   return config_.label_names;
@@ -281,7 +203,21 @@ const SemanticColorMap* GlobalInfo::getSemanticColorMap() const {
 }
 
 SharedDsgInfo::Ptr GlobalInfo::createSharedDsg() const {
-  return std::make_shared<SharedDsgInfo>(config_.layer_id_map);
+  auto graph_info = std::make_shared<SharedDsgInfo>(config_.graph);
+  auto& graph = *graph_info->graph;
+
+  const spark_dsg::Labelspace labelspace(getLabelToNameMap());
+  if (labelspace) {
+    labelspace.save(graph, "mesh");
+    for (const auto& layer_name : config_.label_space.semantic_layers) {
+      const auto key = graph.getLayerKey(layer_name);
+      if (key) {
+        labelspace.save(graph, key->layer, key->partition);
+      }
+    }
+  }
+
+  return graph_info;
 }
 
 bool GlobalInfo::setSensor(const Sensor::Ptr& sensor, bool allow_override) {
@@ -290,14 +226,12 @@ bool GlobalInfo::setSensor(const Sensor::Ptr& sensor, bool allow_override) {
     return false;
   }
 
-  // first registration of a given name always succeeds
   auto iter = sensors_.find(sensor->name);
   if (iter == sensors_.end()) {
     sensors_[sensor->name] = sensor;
     return true;
   }
 
-  // a name collision is only allowed when the caller explicitly opts in
   if (!allow_override) {
     LOG(ERROR) << "Sensor '" << sensor->name << "' already exists!";
     return false;
@@ -332,8 +266,26 @@ std::unique_ptr<VolumetricWindow> GlobalInfo::createVolumetricWindow() const {
   return config_.map_window.create();
 }
 
+spark_dsg::Mesh::Ptr GlobalInfo::createMesh() const {
+  return std::make_shared<spark_dsg::Mesh>(
+      config_.mesh.with_colors,
+      true,  // we force the mesh to have last seen stamps
+      config_.mesh.with_labels,
+      config_.mesh.with_first_seen_stamps);
+}
+
 std::ostream& operator<<(std::ostream& out, const GlobalInfo& config) {
   out << config::toString(config.getConfig());
+  const auto sensor_names = config.getAvailableSensors();
+  for (const auto& name : sensor_names) {
+    auto sensor = config.getSensor(name);
+    if (!sensor) {
+      continue;
+    }
+
+    out << "sensor '" << name << "'" << sensor->dump();
+  }
+
   return out;
 }
 

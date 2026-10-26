@@ -33,10 +33,10 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
+#include <map>
 #include <memory>
 #include <queue>
 #include <thread>
-#include <unordered_map>
 
 #include "hydra/common/common_types.h"
 #include "hydra/common/module.h"
@@ -44,101 +44,59 @@
 #include "hydra/common/shared_module_state.h"
 #include "hydra/loop_closure/detector.h"
 #include "hydra/loop_closure/loop_closure_config.h"
-#include "hydra/utils/log_utilities.h"
 
-/**
- * @file loop_closure_module.h
- * @brief Module that runs loop-closure detection on its own thread. It drains
- *        frontend updates, maintains a local copy of the scene graph, drives
- *        the detector against each query agent, and forwards the resulting
- *        constraints to the backend.
- */
 namespace hydra {
 
-/// @brief Threaded module wrapping the loop-closure detector.
-///
-/// Each spin merges the latest frontend graph into a local copy, picks a query
-/// agent within the configured time horizon, updates the descriptor caches, and
-/// runs detection. Valid solutions are deduplicated per anchor and pushed to
-/// the backend queue.
 class LoopClosureModule : public Module {
  public:
-  /// @brief Construct the module.
-  /// @param config Module and detector configuration.
-  /// @param state Shared pipeline state, including the scene graph the module reads.
   LoopClosureModule(const LoopClosureConfig& config,
                     const SharedModuleState::Ptr& state);
 
   virtual ~LoopClosureModule();
 
-  /// @brief Launch the spin thread.
   void start() override;
 
-  /// @brief Signal the spin thread to stop and join it.
   void stop() override;
 
-  /// @brief Write any module output for the run to the log location.
-  /// @param log_setup Logging paths for the run.
-  void save(const LogSetup& log_setup) override;
+  void save(const DataDirectory& output) override;
 
-  /// @brief Summarize module state for logging.
-  /// @return A human-readable status string.
   std::string printInfo() const override;
 
-  /// @brief Spin loop body run on the worker thread until shutdown.
   void spin();
 
-  /// @brief Process at most one queued update.
-  /// @param force_update Run detection even when the graph sequence number is unchanged.
-  /// @return True when an update was processed, false when no data was waiting.
   bool spinOnce(bool force_update);
 
-  /// @brief Access the underlying detector.
-  /// @return Reference to the detector.
   lcd::LcdDetector& getDetector() const;
 
  protected:
-  /// @brief Merge the latest graph, run detection, and forward results.
-  /// @param force_update Run detection even when the graph sequence number is unchanged.
   void spinOnceImpl(bool force_update);
 
-  /// @brief Drain queued frontend inputs into the module's working state.
-  /// @return Timestamp (ns) of the most recent input drained.
   size_t processFrontendOutput();
 
-  /// @brief Select the place nodes near the query agent to describe and cache.
-  /// @param agent_pos World position of the query agent.
-  /// @return The set of nearby place node identifiers.
   NodeIdSet getPlacesToCache(const Eigen::Vector3d& agent_pos);
 
-  /// @brief Choose the agent node to query once it is past the time horizon.
-  /// @param timestamp_ns Current timestamp in nanoseconds.
-  /// @return The query agent identifier, or empty when no agent is ready.
   std::optional<NodeId> getQueryAgentId(size_t timestamp_ns);
 
+  //! Whether a closure to the target is too soon after the last one (records it if not)
+  bool isRepeatClosure(NodeId target, uint64_t timestamp_ns);
+
  protected:
-  std::atomic<bool> should_shutdown_{false};       ///< Set to break the spin loop.
-  std::unique_ptr<std::thread> spin_thread_;       ///< Worker thread running spin().
-  uint64_t last_sequence_number_ = 0;              ///< Sequence number of the last processed graph state.
+  std::atomic<bool> should_shutdown_{false};
+  std::unique_ptr<std::thread> spin_thread_;
+  uint64_t last_sequence_number_ = 0;
 
-  LoopClosureConfig config_;        ///< Module and detector configuration.
-  SharedModuleState::Ptr state_;    ///< Shared pipeline state.
+  LoopClosureConfig config_;
+  SharedModuleState::Ptr state_;
 
-  std::priority_queue<NodeId, std::vector<NodeId>, std::greater<NodeId>> agent_queue_;  ///< Pending agent nodes, smallest identifier first.
-  std::list<NodeId> potential_lcd_root_nodes_;  ///< Place nodes awaiting descriptor creation.
+  std::priority_queue<NodeId, std::vector<NodeId>, std::greater<NodeId>> agent_queue_;
+  std::list<NodeId> potential_lcd_root_nodes_;
+  //! Time of the last loop closure to each node
+  std::map<NodeId, uint64_t> last_closure_ns_;
 
-  std::unique_ptr<lcd::LcdDetector> lcd_detector_;  ///< The loop-closure detector.
-  DynamicSceneGraph::Ptr lcd_graph_;                ///< Local working copy of the scene graph.
-
-  /// Maps a closure target node to the timestamp (ns) it last fired at, so a
-  /// result whose target fired recently is dropped before reaching the backend.
-  /// This collapses a burst of revisit matches into one closure per anchor
-  /// regardless of which layer produced them; the window comes from
-  /// config_.bow_agent.dedup_window_s.
-  std::unordered_map<NodeId, uint64_t> last_fired_against_;
+  std::unique_ptr<lcd::LcdDetector> lcd_detector_;
+  DynamicSceneGraph::Ptr lcd_graph_;
 
  private:
-  /// @brief Stop the worker thread; shared by stop() and the destructor.
   void stopImpl();
 };
 

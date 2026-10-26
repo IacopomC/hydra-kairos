@@ -3,13 +3,14 @@ map_window:
   type: spatial
   max_radius_m: 8.0
 active_window:
+  full_update_separation_s: 0.2
   volumetric_map:
     voxels_per_side: 16
     voxel_size: 0.1
     truncation_distance: 0.3
   tsdf:
     semantic_integrator:
-      type: MLESemanticIntegrator
+      type: SingleLabelIntegrator
 frontend:
   pgmo:
     time_horizon: 15.0
@@ -80,11 +81,6 @@ backend:
       type: UpdatePlacesFunctor
     frontiers:
       type: UpdateFrontiersFunctor
-    archetypes:
-      type: UpdateArchetypesFunctor
-      dominant_weight_threshold: 0.20
-      min_flow_support: 3
-      min_probability: 0.05
     rooms:
       type: UpdateRoomsFunctor
       room_finder:
@@ -106,23 +102,13 @@ backend:
     embed_trajectory_delta_t: 5.0
     num_interp_pts: 3
     interp_horizon: 10.0
-    enable_sparsify: false
-    trans_node_dist: 1.0
-    rot_node_dist: 1.2
-    rpgo:
-      odom_trans_threshold: 0.05
-      odom_rot_threshold: 0.01
-      pcm_trans_threshold: -1
-      pcm_rot_threshold: -1
-      lm_diagonal_damping: true
-      gnc_alpha: 0.9
-      gnc_max_iterations: 100
-      gnc_mu_step: 1.6
-      gnc_cost_tolerance: 1.0e-05
-      gnc_weight_tolerance: 1.0e-04
-      gnc_fix_prev_inliers: true
-      verbosity: UPDATE
+    optimizer:
+      type: KimeraRpgoOptimizer
       solver: LM
+      gnc:
+        inlier_probability: 0.9
+        mu_step: 1.6
+        max_iterations: 100
     add_initial_prior: true
     covariance:
       odom: 1.0e-02

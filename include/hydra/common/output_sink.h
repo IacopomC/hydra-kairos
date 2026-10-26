@@ -39,58 +39,27 @@
 #include <memory>
 #include <string>
 
-/**
- * @file output_sink.h
- * @brief Generic observer interface for fanning out module output to consumers.
- *        A sink receives a fixed argument signature; sinks can wrap free
- *        functions or member functions, be built from config, and be invoked as
- *        a group.
- */
-
 namespace hydra {
 
-/// @brief Abstract consumer invoked with a fixed argument signature.
-/// Provides factory helpers to wrap callbacks or methods, instantiate sinks
-/// from config, and call or describe a whole list of sinks at once.
-/// @tparam Args Argument types each sink is called with.
 template <typename... Args>
 struct OutputSink {
   using Sink = OutputSink<Args...>;
   using Ptr = std::shared_ptr<Sink>;
-  using Factory = config::VirtualConfig<Sink, true>;  ///< Config that constructs a sink.
+  using Factory = config::VirtualConfig<Sink, true>;
   using List = std::list<Ptr>;
 
   virtual ~OutputSink() = default;
-  /// @brief Deliver one set of arguments to this sink.
-  /// @param args Values forwarded to the consumer.
   virtual void call(Args... args) const = 0;
-  /// @brief Return a human-readable description of the sink.
   virtual std::string printInfo() const { return "n/a"; }
 
-  /// @brief Build a sink that forwards to a free callback.
-  /// @param callback Function invoked when the sink is called.
-  /// @return The wrapping sink.
   static Ptr fromCallback(const std::function<void(Args...)>& callback);
 
-  /// @brief Build a sink that forwards to a const member function.
-  /// @tparam T Type owning the method.
-  /// @param callback Const member function to invoke.
-  /// @param instance Object the method is called on.
-  /// @return The wrapping sink.
   template <typename T>
   static Ptr fromMethod(void (T::*callback)(Args...) const, const T* instance);
 
-  /// @brief Build a sink that forwards to a non-const member function.
-  /// @tparam T Type owning the method.
-  /// @param callback Member function to invoke.
-  /// @param instance Object the method is called on.
-  /// @return The wrapping sink.
   template <typename T>
   static Ptr fromMethod(void (T::*callback)(Args...), T* instance);
 
-  /// @brief Construct sinks from a list of factory configs, skipping empty ones.
-  /// @param configs Factory configs describing the sinks to create.
-  /// @return The list of instantiated sinks.
   static List instantiate(const std::vector<Factory>& configs) {
     List sinks;
     for (const auto& config : configs) {
@@ -101,9 +70,6 @@ struct OutputSink {
     return sinks;
   }
 
-  /// @brief Invoke every sink in a list with the same arguments.
-  /// @param sinks Sinks to call.
-  /// @param args Values forwarded to each sink.
   static void callAll(const List& sinks, Args... args) {
     for (const auto& sink : sinks) {
       if (sink) {
@@ -112,9 +78,6 @@ struct OutputSink {
     }
   }
 
-  /// @brief Build a combined description of every sink in a list.
-  /// @param sinks Sinks to describe.
-  /// @return Newline-separated descriptions, one per sink.
   static std::string printSinks(const List& sinks) {
     std::stringstream ss;
 
@@ -134,18 +97,14 @@ struct OutputSink {
   }
 };
 
-/// @brief Sink that forwards calls to a stored free callback.
-/// @tparam Args Argument types the sink is called with.
 template <typename... Args>
 struct FunctionSink : OutputSink<Args...> {
-  /// @brief Wrap a callback.
-  /// @param f Function invoked on each call.
   FunctionSink(const std::function<void(Args...)>& f) : func(f) {}
   virtual ~FunctionSink() = default;
 
   void call(Args... args) const override { func(args...); }
 
-  std::function<void(Args...)> func;  ///< Wrapped callback.
+  std::function<void(Args...)> func;
 };
 
 template <typename... Args>
@@ -154,21 +113,15 @@ typename OutputSink<Args...>::Ptr OutputSink<Args...>::fromCallback(
   return std::make_shared<FunctionSink<Args...>>(callback);
 }
 
-/// @brief Sink that forwards calls to a const member function of an instance.
-/// @tparam T Type owning the method.
-/// @tparam Args Argument types the sink is called with.
 template <typename T, typename... Args>
 struct MethodSink : OutputSink<Args...> {
-  /// @brief Bind a const member function to an instance.
-  /// @param callback Const member function to invoke.
-  /// @param instance Object the method is called on.
   MethodSink(void (T::*callback)(Args...) const, const T* instance)
       : callback(callback), instance(instance) {}
 
   void call(Args... args) const override { (instance->*callback)(args...); }
 
-  void (T::*callback)(Args...) const;  ///< Bound const member function.
-  const T* instance;                   ///< Object the method is called on.
+  void (T::*callback)(Args...) const;
+  const T* instance;
 };
 
 template <typename... Args>
@@ -178,21 +131,15 @@ typename OutputSink<Args...>::Ptr OutputSink<Args...>::fromMethod(
   return std::make_shared<MethodSink<T, Args...>>(callback, instance);
 }
 
-/// @brief Sink that forwards calls to a non-const member function of an instance.
-/// @tparam T Type owning the method.
-/// @tparam Args Argument types the sink is called with.
 template <typename T, typename... Args>
 struct NonConstMethodSink : OutputSink<Args...> {
-  /// @brief Bind a non-const member function to an instance.
-  /// @param callback Member function to invoke.
-  /// @param instance Object the method is called on.
   NonConstMethodSink(void (T::*callback)(Args...), T* instance)
       : callback(callback), instance(instance) {}
 
   void call(Args... args) const override { (instance->*callback)(args...); }
 
-  void (T::*callback)(Args...);  ///< Bound member function.
-  T* instance;                   ///< Object the method is called on.
+  void (T::*callback)(Args...);
+  T* instance;
 };
 
 template <typename... Args>

@@ -42,7 +42,7 @@
 namespace hydra::association {
 namespace {
 
-// NOTE: const references are required because otherwise factory uses copy
+// NOTE(nathan) const references are required because otherwise factory uses copy
 // constructor
 
 static const auto pairwise_reg =
@@ -75,13 +75,12 @@ void declare_config(Pairwise::Config&) { config::name("Pairwise::Config"); }
 
 LayerView Pairwise::candidates(const SceneGraphLayer& layer,
                                const SceneGraphNode& node) const {
-  // Every inactive node is a merge candidate for every other node.
   return LayerView(layer, [&node](const auto& other) {
     if (other.id == node.id) {
       return false;
     }
 
-    // NOTE: this results in some of the nodes on the boundary of the active
+    // NOTE(nathan) this results in some of the nodes on the boundary of the active
     // window being considered as merge targets and sources, but it should be fine
     return !other.attributes().is_active;
   });
@@ -101,12 +100,11 @@ LayerView SemanticPairwise::candidates(const SceneGraphLayer& layer,
     const auto& lhs_attrs = node.attributes<SemanticNodeAttributes>();
     const auto& rhs_attrs = other.attributes<SemanticNodeAttributes>();
     if (rhs_attrs.is_active) {
-      // NOTE: we don't catch all "active window" nodes with this, but it should
+      // NOTE(nathan) we don't catch all "active window" nodes with this, but it should
       // be fine
       return false;
     }
 
-    // Only nodes sharing the same semantic label may merge.
     return lhs_attrs.semantic_label == rhs_attrs.semantic_label;
   });
 }
@@ -119,8 +117,7 @@ void declare_config(NearestNode::Config& config) {
 
 NearestNode::NearestNode(const Config& config, const SceneGraphLayer& layer)
     : config(config) {
-  // Build a spatial lookup over only the inactive nodes of the layer.
-  // TODO: this used to filter by real_place, but there's no way to do that.
+  // TODO(nathan) this used to filter by real_place, but there's no way to do that.
   // (it should be fine generally, but might cause weirdness with the frontiers)
   node_finder = NearestNodeFinder::fromLayer(
       layer, [](const SceneGraphNode& node) { return !node.attributes().is_active; });
@@ -136,7 +133,6 @@ LayerView NearestNode::candidates(const SceneGraphLayer& layer,
 
   const auto& from_attrs = node.attributes();
 
-  // Gather the k spatially nearest inactive nodes as merge candidates.
   std::set<NodeId> candidates;
   node_finder->find(
       from_attrs.position,
@@ -144,7 +140,7 @@ LayerView NearestNode::candidates(const SceneGraphLayer& layer,
       !from_attrs.is_active,
       [&candidates](NodeId place_id, size_t, double) { candidates.insert(place_id); });
 
-  // NOTE: bind by copy required (otherwise reference goes out of scope...)
+  // NOTE(nathan) bind by copy required (otherwise reference goes out of scope...)
   return LayerView(
       layer, [candidates](const auto& node) { return candidates.count(node.id); });
 }
@@ -165,7 +161,6 @@ SemanticNearestNode::~SemanticNearestNode() = default;
 
 LayerView SemanticNearestNode::candidates(const SceneGraphLayer& layer,
                                           const SceneGraphNode& node) const {
-  // Restrict the spatial search to the lookup built for this node's label.
   const auto& from_attrs = node.attributes<SemanticNodeAttributes>();
   const auto iter = node_finders.find(from_attrs.semantic_label);
   if (iter == node_finders.end()) {
@@ -180,7 +175,7 @@ LayerView SemanticNearestNode::candidates(const SceneGraphLayer& layer,
                          candidates.insert(object_id);
                        });
 
-  // NOTE: bind by copy required (otherwise reference goes out of scope...)
+  // NOTE(nathan) bind by copy required (otherwise reference goes out of scope...)
   return LayerView(
       layer, [candidates](const auto& node) { return candidates.count(node.id); });
 }

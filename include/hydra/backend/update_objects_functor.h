@@ -40,51 +40,29 @@
 #include "hydra/backend/update_functions.h"
 #include "hydra/utils/active_window_tracker.h"
 
-/**
- * @file update_objects_functor.h
- * @brief Update functor for the objects layer. Tracks the active objects,
- *        proposes merges between objects via an association strategy, and
- *        combines the attributes (and optionally mesh connections) of merged
- *        objects.
- */
-
 namespace hydra {
 
-/// @brief Updates and merges object-layer nodes.
 struct UpdateObjectsFunctor : public UpdateFunctor {
   struct Config {
-    bool allow_connection_merging = true;  ///< Whether merged objects pool their mesh-vertex connections.
-    /// @brief Association strategy used to find merge candidates among active objects.
+    //! Allow mesh vertices for each object to be merged
+    bool allow_connection_merging = true;
+    //! Association strategy for finding matches to active nodes
     MergeProposer::Config merge_proposer = {config::VirtualConfig<AssociationStrategy>{
         association::SemanticNearestNode::Config{}}};
   } const config;
 
-  /// @brief Constructs the functor from a validated configuration.
   explicit UpdateObjectsFunctor(const Config& config);
-  /// @brief Exposes the merge hook that synthesizes merged object attributes.
   Hooks hooks() const override;
-  /// @brief Updates the active object set for this iteration.
-  /// @param unmerged Graph holding the original, unmerged nodes.
-  /// @param dsg Shared graph whose objects are updated.
-  /// @param info Per-iteration context.
   void call(const DynamicSceneGraph& unmerged,
             SharedDsgInfo& dsg,
             const UpdateInfo::ConstPtr& info) const override;
-  /// @brief Proposes merges between active objects.
-  /// @param graph Graph to search for object merges.
-  /// @param info Per-iteration context.
-  /// @return Proposed object merges.
   MergeList findMerges(const DynamicSceneGraph& graph,
-                       const UpdateInfo::ConstPtr& info) const override;
+                       const UpdateInfo::ConstPtr& info) const;
 
-  /// @brief Combines the attributes of two objects when one is merged into the other.
-  /// @param layer Graph containing both objects.
-  /// @param from Object being absorbed.
-  /// @param to Object that survives.
   void mergeAttributes(const DynamicSceneGraph& layer, NodeId from, NodeId to) const;
 
-  mutable ActiveWindowTracker active_tracker;  ///< Tracks which objects are in the active window.
-  const MergeProposer merge_proposer;          ///< Proposer that selects object merge candidates.
+  mutable ActiveWindowTracker active_tracker;
+  const MergeProposer merge_proposer;
 
  private:
   inline static const auto registration_ =
@@ -92,7 +70,6 @@ struct UpdateObjectsFunctor : public UpdateFunctor {
           "UpdateObjectsFunctor");
 };
 
-/// @brief Declares the configuration fields for UpdateObjectsFunctor.
 void declare_config(UpdateObjectsFunctor::Config& config);
 
 }  // namespace hydra

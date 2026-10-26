@@ -33,20 +33,10 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-
-/**
- * @file sensor_input_packet.h
- * @brief The raw sensor measurement carried by an input frame. Defines the
- *        SensorInputPacket base plus the image (RGB-D) and point-cloud variants,
- *        each of which knows how to populate an InputData via fillInputData().
- */
-
 #include "hydra/input/input_data.h"
 
 namespace hydra {
 
-/// @brief Base class for a sensor's raw measurement at one timestamp. Subclasses
-/// implement fillInputDataImpl() to convert themselves into processed InputData.
 struct SensorInputPacket {
   using Ptr = std::shared_ptr<SensorInputPacket>;
 
@@ -55,40 +45,43 @@ struct SensorInputPacket {
 
   virtual ~SensorInputPacket() = default;
 
-  /// @brief Populate @p msg from this packet (returns false on failure).
   bool fillInputData(InputData& msg) const;
 
-  const uint64_t timestamp_ns;     ///< Acquisition time of the measurement (ns).
-  const std::string sensor_name;   ///< Name of the originating sensor.
-  std::string sensor_frame;        ///< Coordinate frame the measurement is in.
-  FeatureVector input_feature;     ///< Learned feature for the frame (e.g. CLIP for a camera).
+  const uint64_t timestamp_ns;
+  const std::string sensor_name;
+  std::string sensor_frame;
+  //! Learned feature for the input data (e.g., CLIP for camera)
+  FeatureVector input_feature;
 
  protected:
   virtual bool fillInputDataImpl(InputData& msg) const = 0;
 };
 
-/// @brief An RGB-D image measurement: color, depth, and label images per pixel.
 struct ImageInputPacket : public SensorInputPacket {
   explicit ImageInputPacket(uint64_t stamp, const std::string& sensor_name);
 
-  cv::Mat color;                   ///< Color image (one color per pixel).
-  cv::Mat depth;                   ///< Depth image (one depth per pixel).
-  cv::Mat labels;                  ///< Semantic label image (one label per pixel).
-  FeatureMap<int> label_features;  ///< Features associated with each label.
-  bool color_is_bgr = false;       ///< Whether the color image is in BGR order.
+  //! Color for each pixel
+  cv::Mat color;
+  //! Depth for each pixel
+  cv::Mat depth;
+  //! Labels for each pixel
+  cv::Mat labels;
+  //! Features associated with each label
+  FeatureMap<int> label_features;
+  //! Whether or not the input color image is bgr order
+  bool color_is_bgr = false;
 
  protected:
   bool fillInputDataImpl(InputData& msg) const override;
 };
 
-/// @brief A point-cloud measurement: per-point positions, colors, and labels.
 struct CloudInputPacket : public SensorInputPacket {
   explicit CloudInputPacket(uint64_t stamp, const std::string& sensor_name);
 
-  bool in_world_frame = false;  ///< Whether points are already in the world frame.
-  cv::Mat points;               ///< Per-point 3D positions.
-  cv::Mat colors;               ///< Per-point colors.
-  cv::Mat labels;               ///< Per-point semantic labels.
+  bool in_world_frame = false;
+  cv::Mat points;
+  cv::Mat colors;
+  cv::Mat labels;
 
  protected:
   bool fillInputDataImpl(InputData& msg) const override;

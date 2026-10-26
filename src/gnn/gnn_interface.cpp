@@ -49,8 +49,6 @@ struct GnnInterfaceImpl {
         output_map(output_map),
         mem_info(Ort::MemoryInfo::CreateCpu(OrtAllocatorType::OrtArenaAllocator,
                                             OrtMemType::OrtMemTypeDefault)) {
-    // pin inference to a single thread so the model runs deterministically and
-    // does not contend with the rest of the system for cores
     env.reset(new Ort::Env(ORT_LOGGING_LEVEL_WARNING, "hydra_gnn_interface"));
     Ort::SessionOptions options;
     options.SetIntraOpNumThreads(1).SetInterOpNumThreads(1);
@@ -59,9 +57,6 @@ struct GnnInterfaceImpl {
     mem_info = Ort::MemoryInfo::CreateCpu(OrtAllocatorType::OrtArenaAllocator,
                                           OrtMemType::OrtMemTypeDefault);
 
-    // introspect the loaded model to learn its input/output fields (names,
-    // shapes, types); the name pointers are cached separately because the Run
-    // call below wants raw C-string arrays
     inputs = getSessionInputs(session.get(), *allocator);
     for (const auto& input : inputs) {
       input_names.push_back(input.name.c_str());
@@ -75,8 +70,6 @@ struct GnnInterfaceImpl {
 
   TensorMap operator()(const TensorMap& tensors,
                        const std::vector<int64_t>& output_dimensions) const {
-    // wrap each caller-provided tensor as an ORT value in the order the model
-    // expects its inputs; a missing input is fatal since Run requires all of them
     std::vector<Ort::Value> input_values;
     for (const auto& input : inputs) {
       const auto iter = tensors.find(input.name);
@@ -89,10 +82,6 @@ struct GnnInterfaceImpl {
       input_values.push_back(input.makeOrtValue(mem_info, iter->second));
     }
 
-    // pre-allocate output buffers so the model writes in place. Outputs with a
-    // fixed shape are sized directly; outputs with dynamic axes resolve those
-    // axes from the caller-supplied output_dimensions via the index map. The
-    // owning Tensors are kept in tensor_outputs and returned to the caller.
     TensorMap tensor_outputs;
     std::vector<Ort::Value> output_values;
     for (const auto& output : outputs) {
@@ -216,4 +205,4 @@ std::ostream& operator<<(std::ostream& out, const GnnInterface& gnn) {
   return out;
 }
 
-}  // namespace::hydra
+}  // namespace hydra::gnn

@@ -37,47 +37,30 @@
 
 #include "hydra/places/gvd_voxel.h"
 
-/**
- * @file gvd_parent_tracker.h
- * @brief Bookkeeping for the set of nearest-surface parents that make each
- *        Voronoi voxel multiply supported, plus a reference-counted cache of
- *        the surface vertices those parents correspond to.
- */
-
 namespace hydra::places {
 
-struct VoronoiCheckConfig;  ///< Forward declaration; full definition lives in the integrator config.
+// forward declare to avoid header
+struct VoronoiCheckConfig;
 
-/// @brief Cached surface position of a parent voxel with a usage reference count.
 struct GvdVertexInfo {
-  Point pos;             ///< World position of the parent surface vertex.
-  size_t ref_count = 0;  ///< Number of Voronoi voxels currently relying on this parent.
+  Point pos;
+  size_t ref_count = 0;
 };
 
-/// @brief Tracks the distinct parents of each Voronoi voxel and the surface
-/// vertices they map to.
 struct GvdParentTracker {
-  /// @brief Record a neighbor's parent for a voxel if it is sufficiently distinct
-  /// from the parents already stored.
-  /// @return Count of distinct parents accumulated for the voxel after the update.
   uint8_t updateGvdParentMap(const GvdLayer& layer,
                              const VoronoiCheckConfig& config,
                              const GlobalIndex& voxel_index,
                              const GvdVoxel& neighbor);
 
-  /// @brief Register a new parent vertex (or bump its reference count) using the
-  /// parent voxel's surface position; ignores parents no longer on the surface.
   void markNewGvdParent(const GvdLayer& layer, const GlobalIndex& parent);
 
-  /// @brief Drop a voxel's parents, decrementing the affected vertices' reference counts.
   void removeVoronoiFromGvdParentMap(const GlobalIndex& voxel_index);
 
-  /// @brief Garbage-collect unreferenced or off-surface vertices and refresh the
-  /// cached positions of the rest.
   void updateVertexMapping(const GvdLayer& layer);
 
-  GlobalIndexMap<GlobalIndexSet> parents;          ///< Distinct parent indices per Voronoi voxel.
-  GlobalIndexMap<GvdVertexInfo> parent_vertices;   ///< Reference-counted surface vertices per parent.
+  GlobalIndexMap<GlobalIndexSet> parents;
+  GlobalIndexMap<GvdVertexInfo> parent_vertices;
 };
 
 }  // namespace hydra::places

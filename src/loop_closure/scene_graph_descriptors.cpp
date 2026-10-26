@@ -47,8 +47,6 @@ Descriptor::Ptr AgentDescriptorFactory::construct(
     return nullptr;
   }
 
-  // The agent descriptor is just the node's precomputed sparse bag-of-words
-  // (parallel word-id / weight arrays); no aggregation over neighbors needed.
   const auto& attrs = agent_node.attributes<AgentNodeAttributes>();
   auto descriptor = std::make_unique<Descriptor>();
   descriptor->normalized = true;
@@ -56,7 +54,7 @@ Descriptor::Ptr AgentDescriptorFactory::construct(
   descriptor->values = attrs.dbow_values;
   descriptor->root_node = *parent;
   descriptor->nodes.insert(agent_node.id);
-  descriptor->timestamp = agent_node.timestamp.value();
+  descriptor->timestamp = attrs.timestamp;
   descriptor->root_position = graph.getNode(*parent).attributes().position;
   return descriptor;
 }
@@ -78,18 +76,18 @@ Descriptor::Ptr ObjectDescriptorFactory::construct(
   descriptor->normalized = false;
   descriptor->values = decltype(descriptor->values)::Zero(num_classes, 1);
   descriptor->root_node = *parent;
-  descriptor->timestamp = agent_node.timestamp.value();
+  descriptor->timestamp = agent_node.attributes<AgentNodeAttributes>().timestamp;
   descriptor->root_position = root_position;
   descriptor->nodes = getSubgraphNodes(config, graph, *parent, false);
+  // an empty subgraph carries no information and shouldn't rule out any candidates
+  descriptor->is_null = descriptor->nodes.empty();
 
-  // Build a histogram of object semantic labels over the local subgraph: one
-  // bin per class, incremented once per nearby object. This is the descriptor.
   for (const auto node : descriptor->nodes) {
     const auto attrs = graph.getNode(node).attributes<SemanticNodeAttributes>();
     const size_t label = attrs.semantic_label;
     if (label > static_cast<size_t>(descriptor->values.rows())) {
       LOG(ERROR) << "label " << static_cast<int>(label) << " for node "
-                 << NodeSymbol(node).getLabel() << " exceeds max label "
+                 << NodeSymbol(node).str() << " exceeds max label "
                  << descriptor->values.rows();
       continue;
     }
@@ -117,13 +115,12 @@ Descriptor::Ptr PlaceDescriptorFactory::construct(
   descriptor->normalized = false;
   descriptor->values = decltype(descriptor->values)::Zero(histogram.bins, 1);
   descriptor->root_node = *parent;
-  descriptor->timestamp = agent_node.timestamp.value();
+  descriptor->timestamp = agent_node.attributes<AgentNodeAttributes>().timestamp;
   descriptor->root_position = root_position;
   descriptor->nodes = getSubgraphNodes(config, graph, *parent, true);
+  // an empty subgraph carries no information and shouldn't rule out any candidates
+  descriptor->is_null = descriptor->nodes.empty();
 
-  // Build a histogram of place free-space distances (each place's distance to
-  // its nearest obstacle) over the local subgraph. The shape of this
-  // distribution characterizes the geometry around the root place.
   const auto& places = graph.getLayer(DsgLayers::PLACES);
   for (const auto node : descriptor->nodes) {
     const auto& attrs = places.getNode(node).attributes<PlaceNodeAttributes>();

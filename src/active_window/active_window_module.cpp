@@ -50,6 +50,7 @@ void declare_config(ActiveWindowModule::Config& config) {
   config.map_window.setOptional();
   field(config.map_window, "map_window");
   field(config.sinks, "sinks");
+  field(config.validate_mesh_fields, "validate_mesh_fields");
 }
 
 ActiveWindowModule::Config::Config(bool with_semantics, bool with_tracking)
@@ -65,6 +66,20 @@ ActiveWindowModule::ActiveWindowModule(const Config& config,
       map_(config.volumetric_map),
       map_window_(config.map_window ? config.map_window.create()
                                     : GlobalInfo::instance().createVolumetricWindow()) {
+  const auto mesh_config = GlobalInfo::instance().getConfig().mesh;
+  if (config.validate_mesh_fields) {
+    // double-check that the frontend and backend will actually receive labels and
+    // first-seen stamps
+    if (config.volumetric_map.with_semantics && !mesh_config.with_labels) {
+      LOG(FATAL) << "Volumetric map contains semantics, but mesh does not have labels "
+                    "enabled!";
+    }
+
+    if (config.volumetric_map.with_tracking && !mesh_config.with_first_seen_stamps) {
+      LOG(FATAL) << "Volumetric map contains tracking layer, but mesh does not have "
+                    "first-seen stamps enabled!";
+    }
+  }
 }
 
 void ActiveWindowModule::start() {
@@ -92,8 +107,6 @@ void ActiveWindowModule::stopImpl() {
   }
 }
 
-void ActiveWindowModule::save(const LogSetup&) {}
-
 std::string ActiveWindowModule::printInfo() const {
   return config::toString(config) + "\n" + Sink::printSinks(sinks_);
 }
@@ -101,10 +114,7 @@ std::string ActiveWindowModule::printInfo() const {
 void ActiveWindowModule::spin() {
   bool should_shutdown = false;
   while (!should_shutdown) {
-    // poll() blocks until data is available or the poll times out.
     bool has_data = input_queue_->poll();
-    // Only honor a shutdown request once the queue has drained (or on forced
-    // shutdown), so pending messages are not dropped on a normal stop.
     if (hydra::GlobalInfo::instance().force_shutdown() || !has_data) {
       should_shutdown = should_shutdown_;
     }
@@ -114,13 +124,11 @@ void ActiveWindowModule::spin() {
     }
 
     const auto msg = input_queue_->pop();
-    // spinOnce may legitimately produce no output (e.g. partial update); skip it.
     auto output = spinOnce(*msg);
     if (!output) {
       continue;
     }
 
-    // Fan the result out to registered sinks, then forward downstream if wired up.
     Sink::callAll(sinks_, msg->timestamp_ns, map_, *output);
     if (output_queue_) {
       output_queue_->push(output);
@@ -129,8 +137,6 @@ void ActiveWindowModule::spin() {
 }
 
 bool ActiveWindowModule::step(const InputPacket::Ptr& msg) {
-  // Synchronous single-message variant of the spin loop body: process one packet
-  // inline (no queue, no thread) and report whether output was produced.
   if (!msg) {
     return false;
   }

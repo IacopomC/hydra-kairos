@@ -40,43 +40,32 @@
 #include <memory>
 #include <mutex>
 
-/**
- * @file shared_dsg_info.h
- * @brief Scene graph shared between pipeline modules along with the
- *        synchronization and bookkeeping needed to share it: a guarding mutex,
- *        an update flag and sequence number, the layer/prefix mappings, and
- *        pending node merges.
- */
-
 namespace hydra {
 
-/// @brief A scene graph plus the state needed to share it across modules safely.
 struct SharedDsgInfo {
   using Ptr = std::shared_ptr<SharedDsgInfo>;
+  struct Config {
+    std::map<std::string, spark_dsg::LayerKey> layers{
+        {spark_dsg::DsgLayers::OBJECTS, 2},
+        {spark_dsg::DsgLayers::PLACES, 3},
+        {spark_dsg::DsgLayers::MESH_PLACES, {3, 1}},
+        {spark_dsg::DsgLayers::ROOMS, 4},
+        {spark_dsg::DsgLayers::BUILDINGS, 5},
+        {spark_dsg::DsgLayers::AGENTS, 2},
+    };
+  } const config;
 
-  /// @brief Construct an info object with an empty graph and the given mappings.
-  /// @param layer_id_map Maps each layer to the symbol prefix used for its nodes.
-  explicit SharedDsgInfo(const std::map<spark_dsg::LayerId, char>& layer_id_map);
+  explicit SharedDsgInfo(const Config& config);
 
-  /// @brief Produce a deep copy of this shared info.
   SharedDsgInfo::Ptr clone() const;
 
-  // Mutexes are ordered to avoid deadlock:
-  //   1. SharedDsgInfo::mutex (loop-closure detection)
-  //   2. SharedDsgInfo::mutex (backend)
-  //   3. SharedDsgInfo::mutex (frontend)
-  //   4. SharedModuleState::mesh_mutex
-  // When acquiring two of these, always lock the lower-numbered one first.
-  mutable std::mutex mutex;            ///< Guards access to this graph; see the ordering note above.
-  std::atomic<bool> updated;           ///< Set when the graph has changed since last consumed.
-  uint64_t sequence_number = 0;        ///< Monotonic counter incremented on update.
-  spark_dsg::DynamicSceneGraph::Ptr graph;  ///< The shared scene graph.
-  std::map<char, spark_dsg::LayerId> prefix_layer_map;  ///< Layer for each symbol prefix.
-  std::map<spark_dsg::LayerId, char> layer_prefix_map;  ///< Symbol prefix for each layer.
-  std::map<spark_dsg::NodeId, spark_dsg::NodeId> merges;  ///< Pending node merges (from -> into).
-
- protected:
-  SharedDsgInfo();
+  mutable std::mutex mutex;
+  std::atomic<bool> updated;
+  uint64_t sequence_number = 0;
+  spark_dsg::DynamicSceneGraph::Ptr graph;
+  std::map<spark_dsg::NodeId, spark_dsg::NodeId> merges;
 };
+
+void declare_config(SharedDsgInfo::Config& config);
 
 }  // namespace hydra

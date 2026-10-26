@@ -37,56 +37,73 @@
 #include <kimera_pgmo/mesh_types.h>
 #include <spark_dsg/mesh.h>
 
-/**
- * @file pgmo_mesh_traits.h
- * @brief Free-function trait overloads that let the mesh-deformation library read and
- *        write a scene-graph mesh generically. They cover vertex and face counts,
- *        resizing, per-vertex position/color/timestamp/label access, and face access.
- *        Declared in the mesh's namespace so they are found by argument-dependent lookup.
- */
+#include "hydra/reconstruction/voxel_types.h"
 
 namespace spark_dsg {
 
-/// @brief Number of vertices in the mesh.
 size_t pgmoNumVertices(const Mesh& mesh);
 
-/// @brief Resize the mesh vertex storage.
 void pgmoResizeVertices(Mesh& mesh, size_t size);
 
-/// @brief Read a vertex position and, if a traits pointer is given, fill in its color,
-/// timestamp and label where the mesh provides them.
-/// @param mesh Mesh to read from.
-/// @param i Vertex index.
-/// @param traits Optional output for color, stamp and label attributes.
-/// @return The vertex position.
+kimera_pgmo::traits::VertexProperties pgmoGetVertexProperties(const Mesh& mesh);
+
 Eigen::Vector3f pgmoGetVertex(const Mesh& mesh,
                               size_t i,
                               kimera_pgmo::traits::VertexTraits* traits = nullptr);
 
-/// @brief Write a vertex position and any provided attributes the mesh supports.
-/// @param mesh Mesh to modify.
-/// @param i Vertex index.
-/// @param pos New vertex position.
-/// @param traits Optional color, stamp and label values to apply.
 void pgmoSetVertex(Mesh& mesh,
                    size_t i,
                    const Eigen::Vector3f& pos,
-                   const kimera_pgmo::traits::VertexTraits& traits = {});
+                   const kimera_pgmo::traits::VertexTraits* traits = nullptr);
 
-/// @brief Return the timestamp of a vertex.
-/// @throws std::runtime_error if the mesh carries no timestamps.
 uint64_t pgmoGetVertexStamp(const Mesh& mesh, size_t i);
 
-/// @brief Number of faces in the mesh.
 size_t pgmoNumFaces(const Mesh& mesh);
 
-/// @brief Resize the mesh face storage.
 void pgmoResizeFaces(Mesh& mesh, size_t size);
 
-/// @brief Read the vertex indices of a face.
 kimera_pgmo::traits::Face pgmoGetFace(const Mesh& mesh, size_t i);
 
-/// @brief Write the vertex indices of a face.
 void pgmoSetFace(Mesh& mesh, size_t i, const kimera_pgmo::traits::Face& face);
 
 }  // namespace spark_dsg
+
+namespace hydra {
+
+struct BlockMeshIter {
+  explicit BlockMeshIter(const MeshLayer& mesh) : mesh(mesh) {}
+
+  struct const_iterator {
+    using iterator_category = std::forward_iterator_tag;
+    using difference_type = std::ptrdiff_t;
+    using value_type = const std::pair<BlockIndex, const spark_dsg::Mesh&>;
+
+    explicit const_iterator(MeshLayer::const_iterator iter) : iter_(iter) {}
+
+    value_type operator*() const { return {iter_->index, *iter_}; }
+
+    const_iterator& operator++() {
+      ++iter_;
+      return *this;
+    }
+
+    const_iterator operator++(int) {
+      auto tmp = *this;
+      ++iter_;
+      return tmp;
+    }
+
+    bool operator==(const const_iterator& other) const { return other.iter_ == iter_; }
+
+    bool operator!=(const const_iterator& other) const { return other.iter_ != iter_; }
+
+   private:
+    MeshLayer::const_iterator iter_;
+  };
+
+  const MeshLayer& mesh;
+  const_iterator begin() const { return const_iterator(mesh.begin()); }
+  const_iterator end() const { return const_iterator(mesh.end()); }
+};
+
+}  // namespace hydra

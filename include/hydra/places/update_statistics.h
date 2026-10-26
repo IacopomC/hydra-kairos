@@ -35,33 +35,27 @@
 #pragma once
 #include <iostream>
 
-/**
- * @file update_statistics.h
- * @brief Per-update counters summarizing the work the GVD/ESDF integrator
- *        performed in a single pass, useful for diagnostics and logging.
- */
-
 namespace hydra::places {
 
-/// @brief Counters describing what the integrator did during one update.
+/**
+ * @brief Tracking statistics for what the integrator did
+ */
 struct UpdateStatistics {
-  size_t number_surface_flipped;   ///< Voxels whose sign (inside/outside) changed.
-  size_t number_queue_inserts;     ///< Voxels pushed onto the propagation queue.
-  size_t number_lowered_voxels;    ///< Voxels whose distance was decreased.
-  size_t number_raised_voxels;     ///< Voxels whose distance was increased.
-  size_t number_new_voxels;        ///< Newly observed voxels added.
-  size_t number_raise_updates;     ///< Raise-wavefront update operations performed.
-  size_t number_voronoi_found;     ///< Voxels newly marked as Voronoi members.
-  size_t number_lower_skipped;     ///< Lower candidates rejected without an update.
-  size_t number_lower_updated;     ///< Lower candidates that produced an update.
-  size_t number_fixed_no_parent;   ///< Fixed-band voxels left without a parent.
-  size_t number_force_lowered;     ///< Voxels lowered through a forced update.
+  size_t number_surface_flipped;
+  size_t number_queue_inserts;
+  size_t number_lowered_voxels;
+  size_t number_raised_voxels;
+  size_t number_new_voxels;
+  size_t number_raise_updates;
+  size_t number_voronoi_found;
+  size_t number_lower_skipped;
+  size_t number_lower_updated;
+  size_t number_fixed_no_parent;
+  size_t number_force_lowered;
 
-  /// @brief Reset all counters to zero.
   void clear();
 };
 
-/// @brief Stream a human-readable summary of the counters.
 std::ostream& operator<<(std::ostream& out, const UpdateStatistics& stats);
 
 }  // namespace hydra::places

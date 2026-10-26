@@ -40,14 +40,6 @@
 #include "hydra/common/message_queue.h"
 #include "hydra/loop_closure/registration_solution.h"
 
-/**
- * @file pipeline_queues.h
- * @brief Process-global set of message queues that connect pipeline stages.
- *        Exposes the queues linking frontend, backend, and loop-closure
- *        detection, plus optional input queues for descriptors and external
- *        loop closures.
- */
-
 namespace pose_graph_tools {
 struct BowQuery;
 }  // namespace pose_graph_tools
@@ -58,32 +50,35 @@ struct BackendInput;
 struct LcdInput;
 struct FeatureView;
 
-/// @brief Singleton holding the queues that route data between pipeline modules.
 class PipelineQueues {
  public:
   using BowQueue = MessageQueue<std::shared_ptr<const pose_graph_tools::BowQuery>>;
   using LcdQueue = MessageQueue<std::shared_ptr<LcdInput>>;
 
   ~PipelineQueues();
-  /// @brief Access the global queue set.
   static PipelineQueues& instance();
-  /// @brief Empty every queue.
   void clear();
 
-  MessageQueue<std::shared_ptr<BackendInput>> backend_queue;  ///< Frontend-to-backend connection.
-  MessageQueue<lcd::RegistrationSolution> backend_lcd_queue;  ///< Backend-to-loop-closure connection.
-  MessageQueue<std::unique_ptr<FeatureView>> input_features_queue;  ///< Incoming image or point-cloud descriptors.
-  MessageQueue<pose_graph_tools::PoseGraph> external_loop_closure_queue;  ///< Incoming timestamped external loop closures.
+  //! Connection between frontend and backend
+  MessageQueue<std::shared_ptr<BackendInput>> backend_queue;
+  //! Connection between backend and LCD module
+  MessageQueue<lcd::RegistrationSolution> backend_lcd_queue;
+  //! Queue for receiving image or pointcloud level descriptors
+  MessageQueue<std::unique_ptr<FeatureView>> input_features_queue;
+  //! Queue for receiving (timestamped) external loop closures
+  MessageQueue<pose_graph_tools::PoseGraph> external_loop_closure_queue;
 
-  LcdQueue::Ptr lcd_queue;  ///< Optional input queue to the loop-closure module.
-  BowQueue::Ptr bow_queue;  ///< Optional bag-of-words descriptor queue to the loop-closure module.
+  //! Optional input queue to LCD module
+  LcdQueue::Ptr lcd_queue;
+  //! Optional BoW descriptor queue to LCD module
+  BowQueue::Ptr bow_queue;
 
  private:
   PipelineQueues();
 
-  // TODO: have some sort of config or pull from global config
-  // TODO: fix thread safety (by probably just having a single static instance)
-  inline static std::unique_ptr<PipelineQueues> s_instance_;  ///< The singleton instance.
+  // TODO(nathan) have some sort of config or pull from global config
+  // TODO(nathan) fix thread safety (by probably just having a single static instance)
+  inline static std::unique_ptr<PipelineQueues> s_instance_;
 };
 
 }  // namespace hydra

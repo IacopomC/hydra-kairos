@@ -59,7 +59,6 @@ bool DisjointSet::addSet(NodeId node) {
 }
 
 NodeId DisjointSet::findSet(NodeId node) const {
-  // Walk parent pointers until reaching the root (the node that is its own parent).
   NodeId parent = node;
 
   NodeId curr_node;
@@ -81,8 +80,6 @@ std::optional<NodeId> DisjointSet::doUnion(NodeId lhs, NodeId rhs, bool rhs_bett
     return std::nullopt;
   }
 
-  // Union by size: attach the smaller tree under the larger to keep trees shallow.
-  // On a tie, rhs_better lets the caller pick which root survives for stable output.
   const auto lhs_size = sizes.at(lhs_set);
   const auto rhs_size = sizes.at(rhs_set);
   if (lhs_size < rhs_size) {
@@ -92,7 +89,6 @@ std::optional<NodeId> DisjointSet::doUnion(NodeId lhs, NodeId rhs, bool rhs_bett
     std::swap(lhs_set, rhs_set);
   }
 
-  // lhs_set becomes the new root; fold rhs_set's size in and drop it as a root.
   parents[rhs_set] = lhs_set;
   sizes[lhs_set] = sizes[lhs_set] + sizes[rhs_set];
   sizes.erase(rhs_set);  // |sizes| = number of components

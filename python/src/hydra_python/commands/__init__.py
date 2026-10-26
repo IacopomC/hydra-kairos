@@ -24,9 +24,9 @@ def resolve_output_path(output_path: OptPath, force: bool = False):
     if not output_path.exists():
         return output_path
 
-    # click.secho(f"[WARNING]: output {output_path} already exists", fg="yellow")
-    # if not force:
-    #     click.confirm(f"remove {output_path}?", abort=True, default=False)
+    click.secho(f"[WARNING]: output {output_path} already exists", fg="yellow")
+    if not force:
+        click.confirm(f"remove {output_path}?", abort=True, default=False)
 
-    # shutil.rmtree(output_path)
+    shutil.rmtree(output_path)
     return output_path

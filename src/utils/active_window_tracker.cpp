@@ -35,8 +35,14 @@
 #include "hydra/utils/active_window_tracker.h"
 
 #include <glog/logging.h>
+#include <spark_dsg/node_attributes.h>
+#include <spark_dsg/scene_graph_layer.h>
+#include <spark_dsg/scene_graph_node.h>
 
 namespace hydra {
+
+using spark_dsg::SceneGraphLayer;
+using spark_dsg::SceneGraphNode;
 
 void ActiveWindowTracker::clear() {
   for (const auto node : to_clear_) {
@@ -53,8 +59,7 @@ void ActiveWindowTracker::reset() {
 spark_dsg::LayerView ActiveWindowTracker::view(const SceneGraphLayer& layer,
                                                bool freeze) const {
   if (!freeze) {
-    // Drop tracking state for nodes that no longer exist in the layer so they do
-    // not linger in the previously-active or pending-clear sets.
+    // prune all removed nodes
     auto iter = prev_active_.begin();
     while (iter != prev_active_.end()) {
       if (!layer.hasNode(*iter)) {
@@ -66,16 +71,12 @@ spark_dsg::LayerView ActiveWindowTracker::view(const SceneGraphLayer& layer,
     }
   }
 
-  // The view exposes nodes that pass isActive; freeze forwards through so the
-  // predicate observes state without mutating the tracker.
   return {layer,
           [this, freeze](const auto& node) -> bool { return isActive(node, freeze); }};
 }
 
 bool ActiveWindowTracker::isActive(const SceneGraphNode& node, bool freeze) const {
   const auto active = node.attributes().is_active;
-  // A node that was active before stays in the window for this pass even after it
-  // goes inactive; mark it for removal on the next clear() so it lingers one cycle.
   if (prev_active_.count(node.id)) {
     if (!active && !freeze) {
       to_clear_.insert(node.id);
@@ -83,7 +84,6 @@ bool ActiveWindowTracker::isActive(const SceneGraphNode& node, bool freeze) cons
     return true;
   }
 
-  // First time we see an active node: start tracking it as previously active.
   if (active && !freeze) {
     prev_active_.insert(node.id);
   }

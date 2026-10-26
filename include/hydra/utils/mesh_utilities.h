@@ -33,56 +33,30 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
+#include <spark_dsg/bounding_box.h>
+#include <spark_dsg/node_attributes.h>
+
 #include <optional>
 #include <vector>
 
-#include "hydra/common/dsg_types.h"
 #include "hydra/reconstruction/voxel_types.h"
-
-/**
- * @file mesh_utilities.h
- * @brief Helpers that derive node attributes and geometry from mesh vertices: centroids,
- *        object bounding boxes, the active subset of a mesh layer, and outlier-filtered
- *        bounding-box fitting.
- */
 
 namespace hydra {
 
-/// @brief Set a node's position to the centroid of the referenced mesh vertices.
-/// Non-finite vertices are skipped.
-/// @param mesh Mesh providing vertex positions.
-/// @param indices Vertex indices to average.
-/// @param attrs Node attributes whose position is updated.
-/// @return True if at least one finite vertex contributed, false otherwise.
+using spark_dsg::BoundingBox;
+
 bool updateNodeCentroid(const spark_dsg::Mesh& mesh,
                         const std::vector<size_t>& indices,
-                        NodeAttributes& attrs);
+                        spark_dsg::NodeAttributes& attrs);
 
-/// @brief Recompute an object's bounding box and centroid from its mesh vertices.
-/// @param mesh Mesh providing vertex positions.
-/// @param attrs Object attributes to update in place.
-/// @param indices Vertices to use; if null, the object's stored mesh connections are used.
-/// @param type Bounding box type to fit; if unset, the existing box type is kept.
-/// @return True if the centroid update succeeded, false otherwise.
 bool updateObjectGeometry(const spark_dsg::Mesh& mesh,
-                          ObjectNodeAttributes& attrs,
+                          spark_dsg::ObjectNodeAttributes& attrs,
                           const std::vector<size_t>* indices = nullptr,
                           std::optional<BoundingBox::Type> type = std::nullopt);
 
-/// @brief Build a mesh layer holding only the updated blocks that are not archived.
-/// @param mesh_layer Source mesh layer.
-/// @param archived_blocks Blocks to exclude from the result.
-/// @return A new layer with copies of the active updated blocks.
 MeshLayer::Ptr getActiveMesh(const MeshLayer& mesh_layer,
                              const BlockIndices& archived_blocks);
 
-/// @brief Fit a bounding box to a mesh after removing isolated outlier vertices.
-/// Vertices with too few neighbors within the search radius are discarded before fitting.
-/// @param mesh Mesh to fit.
-/// @param type Bounding box type to produce.
-/// @param inlier_min_neighbors Minimum neighbors within the radius to keep a vertex.
-/// @param inlier_search_radius Neighbor search radius in meters.
-/// @return The fitted box, or an empty box if no inliers remain.
 BoundingBox fitBoxToFilteredMesh(const Mesh& mesh,
                                  BoundingBox::Type type = BoundingBox::Type::AABB,
                                  int inlier_min_neighbors = 5,

@@ -47,30 +47,22 @@
 // purposes notwithstanding any copyright notation herein.
 #pragma once
 
-/**
- * @file index_getter.h
- * @brief A small thread-safe index dispenser used to parallelize work over a
- *        fixed list of indices: worker threads repeatedly pull the next index
- *        until the list is exhausted.
- */
-
 #include <mutex>
 #include <utility>
 #include <vector>
 
 namespace hydra {
 
-/// @brief Thread-safe dispenser from which worker threads pull the next index to
-/// process, until the list is exhausted.
-/// @tparam IndexT Type of the index.
+/**
+ * @brief Thread-safe queue where threads can get the next index to process.t
+ *
+ * @template IndexT Type of the index.
+ */
 template <typename IndexT>
 class IndexGetter {
  public:
   explicit IndexGetter(const std::vector<IndexT>& indices)
       : indices_(indices), current_index_(0) {}
-
-  /// @brief Hand out the next index. Returns false once all indices are consumed.
-  /// @param index Set to the next index when one is available.
   bool getNextIndex(IndexT& index) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (current_index_ >= indices_.size()) {
@@ -81,7 +73,7 @@ class IndexGetter {
     return true;
   }
 
-  /// @brief Reset to iterate over the same indices again.
+  // Resets the index getter to iterate over the same indices again.
   void reset() {
     std::lock_guard<std::mutex> lock(mutex_);
     current_index_ = 0u;

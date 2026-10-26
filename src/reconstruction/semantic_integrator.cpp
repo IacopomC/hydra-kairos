@@ -46,27 +46,36 @@
 namespace hydra {
 namespace {
 
-static const auto registration =
+static const auto registration_mle =
     config::RegistrationWithConfig<SemanticIntegrator,
                                    MLESemanticIntegrator,
                                    MLESemanticIntegrator::Config>(
         "MLESemanticIntegrator");
 
-}
+static const auto registration_binary =
+    config::RegistrationWithConfig<SemanticIntegrator,
+                                   BinarySemanticIntegrator,
+                                   BinarySemanticIntegrator::Config>(
+        "BinarySemanticIntegrator");
+
+static const auto registration_firstk =
+    config::RegistrationWithConfig<SemanticIntegrator,
+                                   FirstKSemanticIntegrator,
+                                   FirstKSemanticIntegrator::Config>(
+        "FirstKSemanticIntegrator");
+
+static const auto registration_single =
+    config::RegistrationWithConfig<SemanticIntegrator,
+                                   SingleLabelIntegrator,
+                                   SingleLabelIntegrator::Config>(
+        "SingleLabelIntegrator");
+
+}  // namespace
 
 MLESemanticIntegrator::MLESemanticIntegrator(const Config& config) : config(config) {
   total_labels_ = GlobalInfo::instance().getTotalLabels();
-  // Per-class prior used when a voxel is first observed: uniform over all labels, kept
-  // in log space since updates accumulate log-likelihoods.
   init_likelihood_ = std::log(1.0f / static_cast<float>(total_labels_));
 
-  const auto label_config = GlobalInfo::instance().getLabelSpaceConfig();
-  dynamic_labels_ = label_config.dynamic_labels;
-  invalid_labels_ = label_config.invalid_labels;
-
-  // Observation model as a (true label x observed label) log-likelihood matrix: a
-  // correct observation has probability label_confidence (diagonal), and the remaining
-  // mass is spread over the off-diagonal mismatches.
   const auto match_likelihood = std::log(config.label_confidence);
   const auto nonmatch_likelihood = std::log(1.0f - config.label_confidence);
   observation_likelihoods_ =
@@ -74,39 +83,23 @@ MLESemanticIntegrator::MLESemanticIntegrator(const Config& config) : config(conf
   observation_likelihoods_.diagonal().setConstant(match_likelihood);
 }
 
-bool MLESemanticIntegrator::canIntegrate(uint32_t label) const {
-  if (dynamic_labels_.count(label)) {
-    return false;
-  }
-
-  if (invalid_labels_.count(label)) {
-    return false;
-  }
-
-  return true;
-}
-
-bool MLESemanticIntegrator::isValidLabel(uint32_t label) const {
+void MLESemanticIntegrator::updateLikelihoods(uint32_t label,
+                                              float /*weight*/,
+                                              SemanticVoxel& voxel) const {
   if (label >= total_labels_) {
     if (label != std::numeric_limits<uint32_t>::max()) {
       LOG_FIRST_N(ERROR, 100) << "Encountered invalid label: " << label << " (warning "
                               << google::COUNTER << " / 100)";
     }
-    return false;
+
+    return;
   }
 
-  return canIntegrate(label);
-}
-
-void MLESemanticIntegrator::updateLikelihoods(uint32_t label,
-                                              SemanticVoxel& voxel) const {
-  // Initialize an unseen voxel with the uniform log prior over all labels.
   if (voxel.empty) {
     voxel.empty = false;
     voxel.semantic_likelihoods.setConstant(total_labels_, init_likelihood_);
   }
-  // Bayesian log-space update: adding the observation column accumulates the per-label
-  // log-likelihood of this measurement. The current MLE label is the argmax.
+
   voxel.semantic_likelihoods += observation_likelihoods_.col(label);
   voxel.semantic_likelihoods.maxCoeff(&voxel.semantic_label);
 }
@@ -121,6 +114,103 @@ void declare_config(MLESemanticIntegrator::Config& config) {
                "label_confidence is valid probability",
                false,
                true);
+}
+
+void BinarySemanticIntegrator::updateLikelihoods(uint32_t label,
+                                                 float /* weight */,
+                                                 SemanticVoxel& voxel) const {
+  // Use the semantic_likelihoods to store the counts of the observations.
+  if (voxel.empty) {
+    voxel.empty = false;
+    voxel.semantic_likelihoods.setConstant(2, 0);
+  }
+
+  int idx = label > 0;
+  voxel.semantic_likelihoods[idx] += 1;
+}
+
+void declare_config(BinarySemanticIntegrator::Config& /* config */) {
+  using namespace config;
+  name("BinarySemanticIntegrator::Config");
+}
+
+FirstKSemanticIntegrator::FirstKSemanticIntegrator(const Config& config)
+    : config(config) {}
+
+void FirstKSemanticIntegrator::updateLikelihoods(uint32_t label,
+                                                 float weight,
+                                                 SemanticVoxel& voxel) const {
+  if (voxel.empty) {
+    voxel.empty = false;
+    voxel.semantic_likelihoods.setConstant(config.k, 0.0f);
+    voxel.semantic_labels.setConstant(config.k, -1);
+  }
+
+  bool added = false;
+  for (int i = 0; i < voxel.semantic_likelihoods.rows(); ++i) {
+    if (voxel.semantic_labels(i) != label && voxel.semantic_likelihoods(i) > 0.0f) {
+      continue;  // already have observations for this voxel
+    }
+
+    added = true;
+    auto new_weight = voxel.semantic_likelihoods(i) + weight;
+    if (config.max_weight > 0.0f) {
+      new_weight = std::min(config.max_weight, new_weight);
+    }
+
+    voxel.semantic_likelihoods(i) = new_weight;
+    voxel.semantic_labels(i) = label;
+    break;
+  }
+
+  if (!added) {
+    LOG_FIRST_N(WARNING, 5) << "More unique labels observed than k=" << config.k
+                            << ". Consider increasing k!";
+    return;
+  }
+
+  int max_label = 0;
+  if (voxel.semantic_likelihoods.maxCoeff(&max_label) > config.min_weight) {
+    voxel.semantic_label = voxel.semantic_labels(max_label);
+  }
+}
+
+void declare_config(FirstKSemanticIntegrator::Config& config) {
+  using namespace config;
+  name("FirstKSemanticIntegrator::Config");
+  field(config.k, "k");
+  field(config.min_weight, "min_weight");
+  field(config.max_weight, "max_weight");
+  check(config.k, GT, 0, "k");
+}
+
+SingleLabelIntegrator::SingleLabelIntegrator(const Config& config) : config(config) {}
+
+void SingleLabelIntegrator::updateLikelihoods(uint32_t label,
+                                              float weight,
+                                              SemanticVoxel& voxel) const {
+  if (voxel.empty) {
+    voxel.empty = false;
+    voxel.semantic_likelihoods.setConstant(1, weight);
+    voxel.semantic_label = label;
+    return;
+  }
+
+  const auto curr_weight = voxel.semantic_likelihoods(0);
+  if (voxel.semantic_label != label) {
+    if (weight >= curr_weight) {
+      voxel.semantic_label = label;
+      voxel.semantic_likelihoods(0) = weight - curr_weight;
+    } else {
+      voxel.semantic_likelihoods(0) = curr_weight - weight;
+    }
+  } else {
+    voxel.semantic_likelihoods(0) += weight;
+  }
+}
+
+void declare_config(SingleLabelIntegrator::Config&) {
+  ::config::name("SingleLabelIntegrator::Config");
 }
 
 }  // namespace hydra

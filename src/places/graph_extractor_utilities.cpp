@@ -34,10 +34,10 @@
  * -------------------------------------------------------------------------- */
 #include "hydra/places/graph_extractor_utilities.h"
 
+#include <config_utilities/config.h>
 #include <spark_dsg/graph_utilities.h>
 #include <spatial_hash/neighbor_utils.h>
 
-#include "hydra/places/nearest_voxel_utilities.h"
 #include "hydra/utils/nearest_neighbor_utilities.h"
 
 namespace hydra::places {
@@ -64,19 +64,30 @@ void sortComponents(const SceneGraphLayer& graph, Components& to_sort) {
 
 }  // namespace
 
-// 3D Bresenham line rasterization between two voxel indices, returning only the interior
-// voxels (endpoints excluded).
+void declare_config(OverlapEdgeConfig& conf) {
+  using namespace config;
+  name("OverlapEdgeConfig");
+  field(conf.num_neighbors_to_check, "num_neighbors_to_check");
+  field(conf.min_clearance_m, "min_clearance_m");
+}
+
+void declare_config(FreespaceEdgeConfig& conf) {
+  using namespace config;
+  name("FreespaceEdgeConfig");
+  field(conf.max_length_m, "max_length_m");
+  field(conf.num_nodes_to_check, "num_nodes_to_check");
+  field(conf.num_neighbors_to_find, "num_neighbors_to_find");
+  field(conf.min_clearance_m, "min_clearance_m");
+}
+
 // implementation loosely based on: https://gist.github.com/yamamushi/5823518
 GlobalIndices makeBresenhamLine(const GlobalIndex& start, const GlobalIndex& end) {
   GlobalIndex diff = end - start;
-  // per-axis step direction
   GlobalIndex inc(diff(0) < 0 ? -1 : 1, diff(1) < 0 ? -1 : 1, diff(2) < 0 ? -1 : 1);
 
   diff = diff.array().abs();
   const GlobalIndex diff_twice = 2 * diff;
 
-  // drive the walk along the dominant (longest) axis; the other two axes step only when
-  // their accumulated error crosses zero
   int max_idx;
   int min_idx_1;
   int min_idx_2;
@@ -132,31 +143,26 @@ EdgeAttributes::Ptr getOverlapEdgeInfo(const SceneGraphLayer& graph,
     return nullptr;
   }
 
-  // model each place as a free-space sphere of radius equal to its GVD clearance; two
-  // places are connected if their spheres overlap, with the edge weight set to the
-  // clearance through the overlap region
   const double r1 = getNodeGvdDistance(graph, node);
   const double r2 = getNodeGvdDistance(graph, neighbor);
   const double d =
       (getNodePosition(graph, node) - getNodePosition(graph, neighbor)).norm();
 
   if (d >= r1 + r2) {
-    return nullptr;  // spheres don't reach each other: no free-space overlap
+    return nullptr;
   }
 
   if (d <= r1 || d <= r2) {
-    // one center lies inside the other sphere: clearance is the smaller radius
     const double clearance = std::min(r1, r2);
     if (clearance < min_clearance) {
       // mostly for debugging
       return nullptr;
     }
 
+    // intersection is inside one node's sphere
     return std::make_unique<EdgeAttributes>(clearance);
   }
 
-  // partial overlap: clearance is the radius of the circle where the two spheres
-  // intersect (closed-form sphere-sphere intersection)
   // see https://mathworld.wolfram.com/Sphere-SphereIntersection.html
   const double clearance =
       std::sqrt(4 * std::pow(d, 2) * std::pow(r1, 2) -
@@ -175,9 +181,6 @@ EdgeAttributes::Ptr getFreespaceEdgeInfo(const SceneGraphLayer& graph,
                                          NodeId node,
                                          NodeId other,
                                          double min_clearance_m) {
-  // an edge is valid only if the straight line between the two places stays entirely in
-  // observed free space with clearance above the threshold; reject as soon as any voxel
-  // on the line is unobserved or too close to an obstacle
   const GlobalIndex source = node_index_map.at(node);
   const GlobalIndex target = node_index_map.at(other);
   const auto path = makeBresenhamLine(source, target);
@@ -211,7 +214,7 @@ void findOverlapEdges(const OverlapEdgeConfig& config,
                       EdgeInfoMap& proposed_edges) {
   NearestNodeFinder node_finder(graph, active_nodes);
   for (const auto node : active_nodes) {
-    // TODO: consider deleting edges
+    // TODO(nathan) consider deleting edges
     node_finder.find(getNodePosition(graph, node),
                      config.num_neighbors_to_check,
                      true,
@@ -235,14 +238,11 @@ void findFreespaceEdges(const FreespaceEdgeConfig& config,
                         const std::unordered_set<NodeId>& nodes,
                         const NodeIndexMap& indices,
                         EdgeInfoMap& proposed_edges) {
-  // freespace edges exist to reconnect a fragmented graph: find the disconnected
-  // components and try to bridge each smaller one back to the largest
   auto components = graph_utilities::getConnectedComponents(graph, nodes, true);
   if (components.size() <= 1) {
     return;  // nothing to do
   }
 
-  // largest component first; grows as other components are successfully bridged into it
   sortComponents(graph, components);
   std::vector<NodeId> first_component = components.front();
 

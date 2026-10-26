@@ -33,52 +33,35 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
+#include <config_utilities/config.h>
+#include <config_utilities/virtual_config.h>
+
 #include "hydra/common/global_info.h"
 #include "hydra/common/module.h"
 #include "hydra/common/shared_module_state.h"
 
-/**
- * @file hydra_pipeline.h
- * @brief Incremental, multi-module pipeline. Owns the shared scene-graph info
- *        and module state, holds the registered modules by name, and drives
- *        their lifecycle (init, start, stop, save) as a group.
- */
-
 namespace hydra {
 
-/// @brief Coordinates the lifecycle of the modules that make up the pipeline.
-/// Initializes global info on construction and owns the shared scene-graph
-/// containers and module state passed to each module.
 class HydraPipeline {
  public:
-  /// @brief Construct the pipeline and initialize global info.
-  /// @param config Pipeline-wide configuration.
-  /// @param robot_id Identifier used to derive the robot prefix.
-  /// @param config_verbosity Verbosity for config printing.
-  /// @param freeze_global_info If true, freeze global info after initialization.
+  //! Additional modules by name, created from config (e.g., from external libraries)
+  using ModuleConfigs = config::OrderedMap<std::string, config::VirtualConfig<Module>>;
+
   HydraPipeline(const PipelineConfig& config,
                 int robot_id = 0,
-                int config_verbosity = 1,
-                bool freeze_global_info = true);
+                int config_verbosity = 1);
 
   virtual ~HydraPipeline();
 
-  /// @brief Construct and wire up the modules.
   virtual void init();
 
-  /// @brief Start all modules.
   virtual void start();
 
-  /// @brief Stop all modules.
   virtual void stop();
 
-  /// @brief Save module outputs to the configured log location.
-  virtual void save();
+  // TODO(nathan) expand API?
+  virtual void save(const DataDirectory& output) const;
 
-  /// @brief Look up a registered module by name and cast it to a derived type.
-  /// @tparam Derived Expected concrete module type.
-  /// @param name Name the module was registered under.
-  /// @return Pointer to the module, or nullptr if absent or of the wrong type.
   template <typename Derived = Module>
   Derived* getModule(const std::string& name) {
     auto iter = modules_.find(name);
@@ -90,23 +73,21 @@ class HydraPipeline {
   }
 
  protected:
-  /// @brief Log a summary of the registered modules.
+  //! Create the configured modules and add them to the ones the pipeline runs
+  void addModules(const ModuleConfigs& configs);
+
   void showModules() const;
 
-  /// @brief Build a descriptive string for a single named module.
-  /// @param name Name the module is registered under.
-  /// @param module Module to describe.
-  /// @return Human-readable description of the module.
-  std::string getModuleInfo(const std::string& name, const Module* module) const;
+  std::string getModuleInfo(const std::string& name, const Module* mod) const;
 
  protected:
-  int config_verbosity_;              ///< Verbosity used when printing configs.
-  SharedDsgInfo::Ptr frontend_dsg_;   ///< Scene graph shared with the frontend.
-  SharedDsgInfo::Ptr backend_dsg_;    ///< Scene graph shared with the backend.
-  SharedModuleState::Ptr shared_state_;  ///< State shared across modules.
+  int config_verbosity_;
+  SharedDsgInfo::Ptr frontend_dsg_;
+  SharedDsgInfo::Ptr backend_dsg_;
+  SharedModuleState::Ptr shared_state_;
 
-  Module::Ptr input_module_;          ///< Module producing pipeline input.
-  std::map<std::string, Module::Ptr> modules_;  ///< Registered modules keyed by name.
+  Module::Ptr input_module_;
+  std::map<std::string, Module::Ptr> modules_;
 };
 
 }  // namespace hydra

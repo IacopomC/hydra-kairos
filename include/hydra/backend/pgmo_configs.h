@@ -33,32 +33,20 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-#include <KimeraRPGO/SolverParams.h>
 #include <kimera_pgmo/kimera_pgmo_interface.h>
-
-/**
- * @file pgmo_configs.h
- * @brief Extends the pose-graph-and-mesh-optimization configuration with the
- *        scene-graph factor covariances and robust-solver settings used by the
- *        backend optimizer.
- */
 
 namespace hydra {
 
-/// @brief Pose-graph-and-mesh-optimization config plus scene-graph factor
-/// covariances and robust-solver settings.
+// supplementary pgmo config
 struct HydraPgmoConfig : public kimera_pgmo::KimeraPgmoConfig {
-  double place_mesh_variance;       ///< Variance on place-to-mesh deformation edges.
-  double place_edge_variance;       ///< Variance on place-to-place deformation edges.
-  double place_merge_variance;      ///< Variance on factors anchoring merged places.
-  double object_merge_variance;     ///< Variance on factors anchoring merged objects.
-  double sg_loop_closure_variance;  ///< Variance on scene-graph loop-closure factors.
-  bool gnc_fix_prev_inliers = true;  ///< Keep previously accepted inliers fixed during robust optimization.
-  KimeraRPGO::Verbosity rpgo_verbosity = KimeraRPGO::Verbosity::UPDATE;  ///< Robust-solver logging verbosity.
-  KimeraRPGO::Solver rpgo_solver = KimeraRPGO::Solver::LM;  ///< Nonlinear solver backing the robust optimizer.
+  // covariance
+  double place_mesh_variance;
+  double place_edge_variance;
+  double place_merge_variance;
+  double object_merge_variance;
+  double sg_loop_closure_variance;
 };
 
-/// @brief Declares the configuration fields for HydraPgmoConfig.
 void declare_config(HydraPgmoConfig& conf);
 
 }  // namespace hydra

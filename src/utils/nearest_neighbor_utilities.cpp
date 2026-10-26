@@ -113,8 +113,6 @@ void NearestNodeFinder::find(const Eigen::Vector3d& position,
                              size_t num_to_find,
                              bool skip_first,
                              const NearestNodeFinder::Callback& callback) {
-  // When skipping the first hit (e.g. the query node itself), request one extra
-  // neighbor so that num_to_find usable results remain after dropping it.
   const size_t limit = skip_first ? num_to_find + 1 : num_to_find;
   std::vector<size_t> nn_indices(limit);
   std::vector<double> distances(limit);
@@ -122,8 +120,6 @@ void NearestNodeFinder::find(const Eigen::Vector3d& position,
   size_t num_found = internals_->kdtree->knnSearch(
       position.data(), limit, nn_indices.data(), distances.data());
 
-  // Map each tree index back to its NodeId before handing it to the callback;
-  // start at index 1 when the nearest hit is the query node and must be ignored.
   size_t i = skip_first ? 1 : 0;
   for (; i < num_found; ++i) {
     callback(internals_->adaptor.nodes[nn_indices[i]], nn_indices[i], distances[i]);
@@ -134,8 +130,6 @@ size_t NearestNodeFinder::findRadius(const Eigen::Vector3d& position,
                                      double radius,
                                      bool skip_first,
                                      const NearestNodeFinder::Callback& callback) {
-  // Radius search returns all neighbors within the radius sorted by distance,
-  // so the first entry is the closest (and is the query node itself if present).
   std::vector<nanoflann::ResultItem<size_t, double>> neighbors;
   size_t num_found = internals_->kdtree->radiusSearch(
       position.data(), radius, neighbors, nanoflann::SearchParameters());
@@ -146,7 +140,6 @@ size_t NearestNodeFinder::findRadius(const Eigen::Vector3d& position,
     callback(internals_->adaptor.nodes[idx], idx, neighbors[i].second);
   }
 
-  // Report the count actually delivered to the callback (excluding the skipped one).
   if (num_found == 0) {
     return num_found;
   } else {
@@ -157,12 +150,10 @@ size_t NearestNodeFinder::findRadius(const Eigen::Vector3d& position,
 size_t makeSemanticNodeFinders(const SceneGraphLayer& layer,
                                SemanticNodeFinders& finders,
                                bool use_active) {
-  // Group node ids by semantic label so each label gets its own KD-tree below.
   std::map<SemanticLabel, std::unordered_set<NodeId>> label_node_map;
   size_t total = 0;
   for (const auto& id_node_pair : layer.nodes()) {
     auto& attrs = id_node_pair.second->attributes<SemanticNodeAttributes>();
-    // Optionally exclude nodes still in the active window from the finders.
     if (!use_active && attrs.is_active) {
       continue;
     }
@@ -223,8 +214,6 @@ PointNeighborSearch::~PointNeighborSearch(){};
 bool PointNeighborSearch::search(const Eigen::Vector3f& query_point,
                                  float& distance_squared,
                                  size_t& index) const {
-  // Single nearest-neighbor query: bind the result set to the caller's index and
-  // squared-distance outputs so they are filled in place by the search.
   nanoflann::KNNResultSet<float> resultSet(1);
   float query_point_arr[3] = {query_point.x(), query_point.y(), query_point.z()};
   resultSet.init(&index, &distance_squared);

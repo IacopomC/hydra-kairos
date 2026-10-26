@@ -36,85 +36,55 @@
 #include <config_utilities/factory.h>
 
 #include "hydra/backend/association_strategies.h"
+#include "hydra/backend/deformation_interpolator.h"
 #include "hydra/backend/merge_tracker.h"
 #include "hydra/backend/update_functions.h"
 #include "hydra/utils/active_window_tracker.h"
 
-/**
- * @file update_places_functor.h
- * @brief Update functor for the places layer. Moves place nodes to their
- *        optimized positions when the optimizer produced values for them, or
- *        otherwise deforms them by interpolating nearby control points, and
- *        proposes merges between nearby places of comparable size.
- */
-
 namespace hydra {
 
-/// @brief Updates place-layer positions and proposes place merges.
 struct UpdatePlacesFunctor : public UpdateFunctor {
   struct Config {
-    double pos_threshold_m = 0.4;        ///< Max centroid distance for a place merge to be considered.
-    double distance_tolerance_m = 0.4;   ///< Max difference in place radius for a merge to be considered.
-    size_t num_control_points = 4;       ///< Control points used to deform places outside optimization.
-    double control_point_tolerance_s = 10.0;  ///< Timestamp tolerance when selecting deformation control points.
-    /// @brief Propose merges over the full layer every N updates (0 disables).
-    ///
-    /// Merge proposals normally originate only from nodes in the active window, so
-    /// two already-archived places can never merge with each other. A periodic
-    /// full-layer pass lets archived duplicates (e.g. from revisits) collapse.
-    size_t full_merge_every_n_updates = 0;
-    /// @brief Association strategy used to find place merge candidates.
+    //! Max distance between node centroids for a merge to be considered
+    double pos_threshold_m = 0.4;
+    //! Max deviation between place radii for a merge to be considered
+    double distance_tolerance_m = 0.4;
+    //! Settings for deformation of the places from the deformation graph
+    DeformationInterpolator::Config deformation_interpolator;
+    //! Association strategy for finding matches to active nodes
     MergeProposer::Config merge_proposer = {
         config::VirtualConfig<AssociationStrategy>{association::NearestNode::Config{}}};
+    //! Layer to update
+    std::string layer = DsgLayers::PLACES;
+    //! Search the whole layer for merges every N updates (0 disables), not only the
+    //! active window, so that duplicate archived places merge without a loop closure
+    size_t full_merge_every_n_updates = 0;
   } const config;
 
-  /// @brief Constructs the functor from a validated configuration.
   explicit UpdatePlacesFunctor(const Config& config);
-  /// @brief Updates place positions, either from optimized values or by interpolation.
-  /// @param unmerged Graph holding the original, unmerged nodes.
-  /// @param dsg Shared graph whose places are updated.
-  /// @param info Per-iteration context.
+  Hooks hooks() const override;
   void call(const DynamicSceneGraph& unmerged,
             SharedDsgInfo& dsg,
             const UpdateInfo::ConstPtr& info) const override;
 
-  /// @brief Moves places to positions taken directly from the optimized values.
-  /// @return Number of places updated.
   size_t updateFromValues(const LayerView& view,
                           SharedDsgInfo& dsg,
                           const UpdateInfo::ConstPtr& info) const;
 
-  /// @brief Deforms places by interpolating nearby control points when no optimized value exists.
-  /// @return Number of places updated.
-  size_t interpFromValues(const LayerView& view,
-                          SharedDsgInfo& dsg,
-                          const UpdateInfo::ConstPtr& info) const;
-
-  /// @brief Proposes merges between nearby places of comparable size.
-  /// @param graph Graph to search for place merges.
-  /// @param info Per-iteration context.
-  /// @return Proposed place merges.
   MergeList findMerges(const DynamicSceneGraph& graph,
-                       const UpdateInfo::ConstPtr& info) const override;
+                       const UpdateInfo::ConstPtr& info) const;
 
-  /// @brief Returns the best merge target for a place, if any candidate qualifies.
-  /// @param layer Places layer holding the candidates.
-  /// @param node Place to find a merge target for.
-  /// @return Target node id, or empty if no candidate qualifies.
   std::optional<NodeId> proposeMerge(const SceneGraphLayer& layer,
                                      const SceneGraphNode& node) const;
 
-  /// @brief Removes places that lack an optimized position from the graph.
-  /// @param graph Graph to prune.
-  /// @param missing_nodes Places without an optimized value.
   void filterMissing(DynamicSceneGraph& graph,
                      const std::list<NodeId> missing_nodes) const;
 
-  mutable ActiveWindowTracker active_tracker;  ///< Tracks which places are in the active window.
-  mutable std::unordered_map<NodeId, Eigen::Vector3d> cached_pos_;  ///< Last known position per place, for interpolation.
-  const MergeProposer merge_proposer;          ///< Proposer that selects place merge candidates.
-  mutable size_t updates_since_full_merge_ = 0;  ///< Updates elapsed since the last full-layer merge pass.
-  mutable bool full_merge_pending_ = false;      ///< Whether findMerges should scan the full layer this update.
+  mutable ActiveWindowTracker active_tracker;
+  mutable size_t updates_since_full_merge_ = 0;
+  mutable bool full_merge_pending_ = false;
+  const MergeProposer merge_proposer;
+  const DeformationInterpolator deformation_interpolator;
 
  private:
   inline static const auto registration_ =
@@ -122,7 +92,6 @@ struct UpdatePlacesFunctor : public UpdateFunctor {
           "UpdatePlacesFunctor");
 };
 
-/// @brief Declares the configuration fields for UpdatePlacesFunctor.
 void declare_config(UpdatePlacesFunctor::Config& config);
 
 }  // namespace hydra

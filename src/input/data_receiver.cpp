@@ -48,8 +48,6 @@ DataReceiver::DataReceiver(const Config& config, const std::string& sensor_name)
 bool DataReceiver::init() { return initImpl(); }
 
 bool DataReceiver::checkInputTimestamp(uint64_t timestamp_ns) {
-  // Rate-limit inputs: reject a frame that arrives too soon after the last
-  // accepted one so the pipeline is not fed faster than input_separation_s.
   if (last_time_received_) {
     std::chrono::nanoseconds curr_time_ns(timestamp_ns);
     std::chrono::nanoseconds last_time_ns(*last_time_received_);
@@ -61,7 +59,6 @@ bool DataReceiver::checkInputTimestamp(uint64_t timestamp_ns) {
     }
   }
 
-  // Only update the reference time when a frame is accepted.
   last_time_received_ = timestamp_ns;
   VLOG(5) << "[Data Receiver] Got input @ " << timestamp_ns << " [ns]";
   return true;

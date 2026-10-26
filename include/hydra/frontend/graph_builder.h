@@ -35,6 +35,8 @@
 #pragma once
 #include <config_utilities/virtual_config.h>
 #include <kimera_pgmo/hashing.h>
+#include <kimera_pgmo/mesh_offset_info.h>
+#include <kimera_pgmo/utils/graph.h>
 #include <pose_graph_tools/bow_query.h>
 #include <spark_dsg/scene_graph_logger.h>
 
@@ -56,20 +58,12 @@
 #include "hydra/frontend/view_database.h"
 #include "hydra/loop_closure/lcd_input.h"
 #include "hydra/odometry/pose_graph_from_odom.h"
-#include "hydra/utils/log_utilities.h"
 
 namespace kimera_pgmo {
 class DeltaCompression;
 class MeshCompression;
+class MeshDelta;
 }  // namespace kimera_pgmo
-
-/**
- * @file graph_builder.h
- * @brief Frontend module that turns active-window output into the scene graph.
- *        It compresses the mesh, segments objects, extracts surface and
- *        free-space places and frontiers, builds the deformation and pose
- *        graphs, and forwards results to the backend and loop-closure stages.
- */
 
 namespace hydra {
 
@@ -77,188 +71,142 @@ class FrontierExtractor;
 class NearestNodeFinder;
 struct VolumetricWindow;
 
-/// @brief Runs the frontend stage of the pipeline. On each active-window packet
-/// it updates the mesh, objects, places (surface and free-space), frontiers,
-/// deformation graph, and pose graph in the shared scene graph, then merges the
-/// result into the backend and loop-closure graphs and notifies its sinks.
 class GraphBuilder : public Module {
  public:
   using Ptr = std::shared_ptr<GraphBuilder>;
-  using InputQueue = MessageQueue<ActiveWindowOutput::Ptr>;  ///< Queue of incoming active-window packets.
-  using InputCallback = std::function<void(const ActiveWindowOutput&)>;  ///< Per-packet callback type.
-  using Sink = OutputSink<uint64_t, const DynamicSceneGraph&, const BackendInput&>;  ///< Per-step output observer.
+  using InputQueue = MessageQueue<ActiveWindowOutput::Ptr>;
+  using InputCallback = std::function<void(const ActiveWindowOutput&)>;
+  using Sink = OutputSink<uint64_t, const DynamicSceneGraph&, const BackendInput&>;
 
-  /// @brief Settings selecting which frontend stages run and how.
   struct Config {
-    bool lcd_use_bow_vectors = true;  ///< Forward bag-of-words vectors to loop closure.
-
-    /// @brief Resolution and horizon settings for the deformation graph.
+    bool lcd_use_bow_vectors = true;
     struct DeformationConfig {
-      double mesh_resolution = 0.1;     ///< Mesh vertex spacing for compression (m).
-      double d_graph_resolution = 1.5;  ///< Deformation-graph node spacing (m).
-      double time_horizon = 10.0;       ///< Deformation-graph time horizon (s).
+      double mesh_resolution = 0.1;
+      double d_graph_resolution = 1.5;
+      double time_horizon = 10.0;
     } pgmo;
-
-    GraphUpdater::Config graph_updater{{{"objects", {'O', std::nullopt}}}};  ///< Mapping for applying graph updates.
-    GraphConnector::Config graph_connector;  ///< Interlayer edge connector settings.
-    bool enable_mesh_objects = true;         ///< Segment objects from the mesh.
-    MeshSegmenter::Config object_config;     ///< Object segmenter settings.
+    GraphUpdater::Config graph_updater{{{DsgLayers::OBJECTS, {'O', std::nullopt}}}};
+    GraphConnector::Config graph_connector;
+    bool enable_mesh_objects = true;
+    MeshSegmenter::Config object_config;
     config::VirtualConfig<PoseGraphTracker> pose_graph_tracker{
-        PoseGraphFromOdom::Config()};        ///< Source of pose-graph updates.
-    bool enable_place_mesh_mapping = false;  ///< Link place nodes to mesh vertices.
-    config::VirtualConfig<SurfacePlacesInterface> surface_places;    ///< Surface place extractor (optional).
-    config::VirtualConfig<FreespacePlacesInterface> freespace_places; ///< Free-space place extractor (optional).
-    bool use_frontiers = false;              ///< Extract exploration frontiers.
-    config::VirtualConfig<FrontierExtractor> frontier_places;  ///< Frontier extractor (optional).
-    ViewDatabase::Config view_database;      ///< View database settings for feature assignment.
-    std::vector<Sink::Factory> sinks;        ///< Factories for per-step output observers.
-    bool no_packet_collation = false;        ///< Process each input packet separately instead of merging queued packets.
-    bool overwrite_mesh_timestamps = false;  ///< Overwrite mesh vertex timestamps from the tracking layer.
+        PoseGraphFromOdom::Config()};
+    config::VirtualConfig<SurfacePlacesInterface> surface_places;
+    config::VirtualConfig<FreespacePlacesInterface> freespace_places;
+    bool use_frontiers = false;
+    config::VirtualConfig<FrontierExtractor> frontier_places;
+    ViewDatabase::Config view_database;
+    std::vector<Sink::Factory> sinks;
+    //! @brief Disable merging update packets from the active window if true
+    bool no_packet_collation = false;
+    //! @brief Verbosity control for frontend
+    size_t verbosity = 0;
   } const config;
 
-  /// @brief Construct the frontend module.
-  /// @param config Frontend settings.
-  /// @param dsg Shared scene-graph state to populate.
-  /// @param state Shared state holding the backend and loop-closure graphs.
-  /// @param logs Optional logging setup.
   GraphBuilder(const Config& config,
                const SharedDsgInfo::Ptr& dsg,
-               const SharedModuleState::Ptr& state,
-               const LogSetup::Ptr& logs = nullptr);
+               const SharedModuleState::Ptr& state);
 
   virtual ~GraphBuilder();
 
-  /// @brief Launch the spin thread.
   void start() override;
 
-  /// @brief Signal shutdown and join the spin thread.
   void stop() override;
 
-  /// @brief Persist frontend outputs and sub-module state.
-  void save(const LogSetup& log_setup) override;
+  void save(const DataDirectory& output) override;
 
-  /// @brief Return a human-readable summary of the module's status.
   std::string printInfo() const override;
 
-  /// @brief Run the input-processing loop until shutdown.
   virtual void spin();
 
-  /// @brief Process a single queued input packet, if any.
-  /// @return True if a packet was processed.
   bool spinOnce();
 
-  /// @brief Access the input queue.
   inline InputQueue::Ptr queue() const { return queue_; }
 
-  /// @brief Register a per-step output observer.
   void addSink(const Sink::Ptr& sink);
 
  protected:
-  /// @brief Register a callback invoked early in each update.
   void addInputCallback(InputCallback callback);
 
-  /// @brief Register a callback invoked after the mesh is updated.
   void addPostMeshCallback(InputCallback callback);
 
-  /// @brief Run spinOnce for a packet on a detached thread.
   void dispatchSpin(ActiveWindowOutput::Ptr msg);
 
-  /// @brief Process one packet: update the graph, then merge to backend and LCD.
   void spinOnce(const ActiveWindowOutput::Ptr& msg);
 
-  /// @brief Apply graph updates and run input callbacks and the connector.
   virtual void updateImpl(const ActiveWindowOutput::Ptr& msg);
 
  protected:
-  /// @brief Compress and archive the mesh from the active-window output.
   void updateMesh(const ActiveWindowOutput& msg);
 
-  /// @brief Segment objects from the mesh and update object nodes.
   void updateObjects(const ActiveWindowOutput& msg);
 
-  /// @brief Detect exploration frontiers and update frontier nodes.
   void updateFrontiers(const ActiveWindowOutput& msg);
 
-  /// @brief Extract free-space places and update place nodes.
   void updatePlaces(const ActiveWindowOutput& msg);
 
-  /// @brief Extract 2D surface places and update place nodes.
   void updatePlaces2d(const ActiveWindowOutput& msg);
 
-  /// @brief Update the deformation graph from the latest mesh.
   void updateDeformationGraph(const ActiveWindowOutput& msg);
 
-  /// @brief Apply pose-graph updates from the tracker.
   void updatePoseGraph(const ActiveWindowOutput& msg);
 
  protected:
-  /// @brief Attach cached bag-of-words vectors to agent nodes.
-  void assignBowVectors(const DynamicSceneGraphLayer& agents);
+  void assignBowVectors();
 
-  /// @brief Archive 2D places that are no longer active.
   void archivePlaces2d(const NodeIdSet active_places);
 
-  /// @brief Run all per-packet processing stages in order.
   void processNextInput(const ActiveWindowOutput& msg);
 
-  /// @brief Connect place nodes to nearby mesh vertices.
-  void updatePlaceMeshMapping(const ActiveWindowOutput& input);
-
  protected:
-  uint64_t sequence_number_;                       ///< Monotonic counter of processed packets.
-  mutable std::mutex gvd_mutex_;                   ///< Guards free-space place extraction.
-  std::atomic<bool> should_shutdown_{false};       ///< Set to request the spin thread to stop.
-  std::unique_ptr<std::thread> spin_thread_;       ///< Background input-processing thread.
-  InputQueue::Ptr queue_;                          ///< Queue of incoming active-window packets.
-  std::atomic<bool> spin_finished_;                ///< Tracks completion of an in-flight spin.
+  uint64_t sequence_number_;
+  mutable std::mutex gvd_mutex_;
+  std::atomic<bool> should_shutdown_{false};
+  std::unique_ptr<std::thread> spin_thread_;
+  InputQueue::Ptr queue_;
+  std::atomic<bool> spin_finished_;
 
-  LcdInput::Ptr lcd_input_;                         ///< Loop-closure input assembled this step.
-  BackendInput::Ptr backend_input_;                 ///< Backend input assembled this step.
+  LcdInput::Ptr lcd_input_;
+  BackendInput::Ptr backend_input_;
 
-  SharedDsgInfo::Ptr dsg_;                          ///< Shared scene graph populated by the frontend.
-  SharedModuleState::Ptr state_;                    ///< Shared state with backend and LCD graphs.
-  kimera_pgmo::MeshDelta::Ptr last_mesh_update_;    ///< Most recent mesh delta forwarded to the backend.
-  StampUpdate::Ptr last_mesh_stamp_update_;         ///< Most recent mesh timestamp update.
+  SharedDsgInfo::Ptr dsg_;
+  SharedModuleState::Ptr state_;
+  kimera_pgmo::MeshOffsetInfo mesh_offsets_;
+  std::shared_ptr<kimera_pgmo::MeshDelta> last_mesh_update_;
 
-  kimera_pgmo::Graph deformation_graph_;            ///< Deformation graph maintained over the mesh.
-  std::unique_ptr<kimera_pgmo::DeltaCompression> mesh_compression_;        ///< Incremental mesh compressor.
-  std::unique_ptr<kimera_pgmo::MeshCompression> deformation_compression_;  ///< Deformation-graph mesh compressor.
-  kimera_pgmo::HashedIndexMapping deformation_remapping_;                  ///< Index remapping for the deformation graph.
-  std::shared_ptr<kimera_pgmo::HashedIndexMapping> mesh_remapping_;        ///< Index remapping for the compressed mesh.
+  kimera_pgmo::Graph deformation_graph_;
+  std::unique_ptr<kimera_pgmo::DeltaCompression> mesh_compression_;
+  std::unique_ptr<kimera_pgmo::MeshCompression> deformation_compression_;
 
-  GraphUpdater graph_updater_;                      ///< Applies incoming graph updates.
-  GraphConnector graph_connector_;                  ///< Maintains interlayer parent/child edges.
+  GraphUpdater graph_updater_;
+  GraphConnector graph_connector_;
 
-  std::unique_ptr<VolumetricWindow> map_window_;    ///< Active-window bounds.
-  std::unique_ptr<MeshSegmenter> segmenter_;        ///< Object segmenter.
-  std::unique_ptr<PoseGraphTracker> tracker_;       ///< Source of pose-graph updates.
-  std::unique_ptr<SurfacePlacesInterface> surface_places_;     ///< Surface place extractor (optional).
-  std::unique_ptr<FreespacePlacesInterface> freespace_places_; ///< Free-space place extractor (optional).
-  std::unique_ptr<FrontierExtractor> frontier_places_;         ///< Frontier extractor (optional).
-  ViewDatabase view_database_;                      ///< Buffers views and assigns place features.
+  std::unique_ptr<VolumetricWindow> map_window_;
+  std::unique_ptr<MeshSegmenter> segmenter_;
+  std::unique_ptr<PoseGraphTracker> tracker_;
+  std::unique_ptr<SurfacePlacesInterface> surface_places_;
+  std::unique_ptr<FreespacePlacesInterface> freespace_places_;
+  std::unique_ptr<FrontierExtractor> frontier_places_;
+  ViewDatabase view_database_;
 
-  SceneGraphLogger frontend_graph_logger_;          ///< Logs the graph each step when enabled.
-  LogSetup::Ptr logs_;                              ///< Logging setup, if any.
-  MessageQueue<PoseGraphPacket> pose_graph_updates_;  ///< Pending pose-graph packets.
+  SceneGraphLogger frontend_graph_logger_;
+  MessageQueue<PoseGraphPacket> pose_graph_updates_;
 
-  NodeIdSet previous_active_places_;                ///< Active free-space places from the prior step.
-  NodeIdSet previous_active_places_2d_;             ///< Active surface places from the prior step.
-  std::map<NodeId, size_t> agent_key_map_;          ///< Maps agent nodes to their bag-of-words keys.
-  std::list<pose_graph_tools::BowQuery::ConstPtr> cached_bow_messages_;  ///< Bag-of-words messages awaiting assignment.
+  NodeIdSet previous_active_places_;
+  std::list<pose_graph_tools::BowQuery::ConstPtr> cached_bow_messages_;
 
-  Sink::List sinks_;                                ///< Per-step output observers.
+  Sink::List sinks_;
 
-  std::mutex mutex_;                                ///< Guards all frontend data during a spin.
+  // TODO(lschmid): This mutex currently simply locks all data for manipulation.
+  std::mutex mutex_;
 
  private:
-  /// @brief Internal shutdown helper.
   void stopImpl();
 
-  std::vector<std::function<void(ActiveWindowOutput::Ptr)>> input_callbacks_;       ///< Registered input callbacks.
-  std::vector<std::function<void(const ActiveWindowOutput&)>> post_mesh_callbacks_; ///< Registered post-mesh callbacks.
+  std::vector<std::function<void(ActiveWindowOutput::Ptr)>> input_callbacks_;
+  std::vector<std::function<void(const ActiveWindowOutput&)>> post_mesh_callbacks_;
 };
 
-/// @brief Declare the config fields for the frontend module.
 void declare_config(GraphBuilder::Config& config);
 
 }  // namespace hydra

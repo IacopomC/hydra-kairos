@@ -33,14 +33,6 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-
-/**
- * @file data_receiver.h
- * @brief Base class for a per-sensor input source. Buffers incoming sensor
- *        packets on a queue for the input module to drain, and rate-limits them
- *        by enforcing a minimum separation between accepted timestamps.
- */
-
 #include <optional>
 
 #include "hydra/common/message_queue.h"
@@ -48,36 +40,31 @@
 
 namespace hydra {
 
-/// @brief Receives sensor packets and queues them for the input module.
-/// Subclasses implement the transport-specific setup in initImpl().
 class DataReceiver {
  public:
   using DataQueue = MessageQueue<SensorInputPacket::Ptr>;
 
   struct Config {
-    double input_separation_s = 0.0;  ///< Minimum spacing between accepted frames (s); 0 disables.
+    double input_separation_s = 0.0;
   };
 
   DataReceiver(const Config& config, const std::string& sensor_name);
   virtual ~DataReceiver() = default;
 
-  /// @brief Initialize the receiver; returns false on failure.
   bool init();
 
  public:
   const Config config;
-  DataQueue queue;  ///< Queue of received packets awaiting consumption.
+  DataQueue queue;
 
  protected:
-  /// @brief Transport-specific initialization, supplied by the subclass.
   virtual bool initImpl() = 0;
 
-  /// @brief Accept or reject a frame by its timestamp per input_separation_s.
   bool checkInputTimestamp(uint64_t timestamp_ns);
 
-  std::optional<uint64_t> last_time_received_;  ///< Timestamp of the last accepted frame.
+  std::optional<uint64_t> last_time_received_;
 
-  const std::string sensor_name_;  ///< Name of the sensor this receiver serves.
+  const std::string sensor_name_;
 };
 
 void declare_config(DataReceiver::Config& config);

@@ -79,36 +79,29 @@ void RoomEvaluator::computeDsgIndices(const DynamicSceneGraph& graph,
                                       RoomIndices& indices) const {
   const auto& rooms = graph.getLayer(DsgLayers::ROOMS);
   for (auto&& [room, room_node] : rooms.nodes()) {
-    // Count actual place nodes (may be through archetype layer)
-    size_t place_count = 0;
+    // rooms can parent places directly or through an intermediate layer
+    std::vector<NodeId> place_ids;
     for (const auto& child : room_node->children()) {
       const auto& child_node = graph.getNode(child);
-      if (child_node.children().empty()) {
-        ++place_count;
-      } else {
-        place_count += child_node.children().size();
+      if (child_node.tryAttributes<PlaceNodeAttributes>()) {
+        place_ids.push_back(child);
+        continue;
+      }
+
+      for (const auto& grandchild : child_node.children()) {
+        if (graph.getNode(grandchild).tryAttributes<PlaceNodeAttributes>()) {
+          place_ids.push_back(grandchild);
+        }
       }
     }
-    if (place_count < config.min_room_nodes) {
-      VLOG(5) << "skipping room of size: " << place_count << " (vs. "
+
+    if (place_ids.size() < config.min_room_nodes) {
+      VLOG(5) << "skipping room of size: " << place_ids.size() << " (vs. "
               << config.min_room_nodes << ")";
       continue;
     }
 
     indices[room] = {};
-
-    // Collect place nodes (direct children or through archetype layer)
-    std::vector<NodeId> place_ids;
-    for (const auto& child : room_node->children()) {
-      const auto& child_node = graph.getNode(child);
-      if (child_node.children().empty()) {
-        place_ids.push_back(child);
-      } else {
-        for (const auto& grandchild : child_node.children()) {
-          place_ids.push_back(grandchild);
-        }
-      }
-    }
 
     for (const auto& place_id : place_ids) {
       const auto& place_node = graph.getNode(place_id);

@@ -37,40 +37,16 @@
 
 #include "hydra/common/dsg_types.h"
 
-/**
- * @file room_utilities.h
- * @brief Helpers for placing room nodes and wiring up room-to-room edges. Computes a
- *        representative position for a room from its member places and connects rooms
- *        whose places are adjacent in the places layer.
- */
-
 namespace hydra {
 
-/// @brief Compute a representative position for a room from its member places. Returns the
-/// centroid when it lies within some place's free-space radius, otherwise projects the
-/// centroid onto the nearest place's free-space boundary.
-/// @param places Places layer holding the member node attributes.
-/// @param cluster Member place IDs of the room.
-/// @return The chosen room position, or the origin when the cluster is empty.
 Eigen::Vector3d getRoomPosition(const SceneGraphLayer& places,
                                 const std::unordered_set<NodeId>& cluster);
 
-/// @brief Add an edge between two rooms whenever their member places are siblings in the
-/// places layer.
-/// @param places Places layer providing the adjacency between member places.
-/// @param labels Cluster label assigned to each place.
-/// @param label_to_room_map Maps each cluster label to its room node ID.
-/// @param rooms Room layer that receives the inter-room edges.
 void addEdgesToRoomLayer(const SceneGraphLayer& places,
                          const std::map<NodeId, size_t>& labels,
                          const std::map<size_t, NodeId> label_to_room_map,
                          SceneGraphLayer& rooms);
 
-/// @brief Refresh the edges of the given rooms by clearing existing links among them and
-/// reconnecting rooms whose member places are adjacent, descending through an archetype
-/// layer when one is present.
-/// @param graph Scene graph holding the rooms and the layers below them.
-/// @param active_rooms Room node IDs whose edges are recomputed.
 void addEdgesToRoomLayer(DynamicSceneGraph& graph,
                          const std::set<NodeId>& active_rooms);
 

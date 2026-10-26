@@ -25,8 +25,6 @@ FeatureVector WeightedMeanPooling::pool(const FeatureGroup& features,
     return FeatureVector();
   }
 
-  // weighted sum of the feature columns, then average over the column count
-  // (normalized by the number of features rather than by the sum of weights)
   const FeatureVector weighted = features * weights;
   return weighted / features.cols();
 }
@@ -39,8 +37,6 @@ FeatureVector MaxPooling::pool(const FeatureGroup& features,
     return FeatureVector();
   }
 
-  // select the single feature column carrying the largest weight; the locals
-  // are named min_* but maxCoeff writes the index of the maximum weight
   int min_row = 0;
   int min_col = 0;
   weights.maxCoeff(&min_row, &min_col);

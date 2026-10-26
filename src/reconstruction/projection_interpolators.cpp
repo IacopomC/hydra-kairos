@@ -96,7 +96,7 @@ Weights InterpolatorNearest::computeWeights(float u,
   return weights;
 }
 
-float InterpolatorNearest::InterpolateRange(const cv::Mat& range_image,
+float InterpolatorNearest::interpolateRange(const cv::Mat& range_image,
                                             const Weights& weights) const {
   return range_image.at<float>(weights.v, weights.u);
 }
@@ -119,8 +119,6 @@ void declare_config(InterpolatorBilinear::Config&) {
 Weights InterpolatorBilinear::computeWeights(float u,
                                              float v,
                                              const cv::Mat& img) const {
-  // Top-left integer pixel of the 2x2 neighborhood. Reject if that neighborhood would
-  // run off the image (need u+1 and v+1 to be valid).
   Weights weights(std::floor(u), std::floor(v));
   if (weights.u < 0 || weights.v < 0 || weights.u >= img.cols - 1 ||
       weights.v >= img.rows - 1) {
@@ -129,8 +127,6 @@ Weights InterpolatorBilinear::computeWeights(float u,
 
   weights.valid = true;
   weights.use_bilinear = true;
-  // Sub-pixel position within the cell; the four bilinear weights are the areas of the
-  // opposite sub-rectangles and sum to one.
   float du = u - static_cast<float>(weights.u);
   float dv = v - static_cast<float>(weights.v);
   weights.w0 = (1.f - du) * (1.f - dv);
@@ -140,7 +136,7 @@ Weights InterpolatorBilinear::computeWeights(float u,
   return weights;
 }
 
-float InterpolatorBilinear::InterpolateRange(const cv::Mat& range_image,
+float InterpolatorBilinear::interpolateRange(const cv::Mat& range_image,
                                              const Weights& weights) const {
   return range_image.at<float>(weights.v, weights.u) * weights.w0 +
          range_image.at<float>(weights.v + 1, weights.u) * weights.w1 +
@@ -165,10 +161,12 @@ Color InterpolatorBilinear::interpolateColor(const cv::Mat& color_image,
 
 int InterpolatorBilinear::interpolateID(const cv::Mat& id_image,
                                         const Weights& weights) const {
-  // IDs can't be blended, so each of the four corner pixels votes with its bilinear
-  // weight and the ID with the largest total weight wins.
-  // NOTE: this is not the same as just picking the ID of the single highest-weight pixel
-  // TODO: consider manually implementing to avoid std::unordered_map memory usage
+  // Since IDs can not be interpolated we assign weights to all IDs in the image
+  // based on the corner weights and return the highest weights ID.
+  // NOTE(nathan) this is not the same as just picking the maximum weight from the
+  // pixels
+  // TODO(nathan) consider manually implementing to avoid std::unordered_map memory
+  // usage
   std::unordered_map<int, float> ids;  // These are zero initialized by default.
   ids[id_image.at<int32_t>(weights.v, weights.u)] += weights.w0;
   ids[id_image.at<int32_t>(weights.v + 1, weights.u)] += weights.w1;
@@ -195,37 +193,40 @@ Weights InterpolatorAdaptive::computeWeights(float u,
                                              float v,
                                              const cv::Mat& ranges) const {
   Weights weights(std::floor(u), std::floor(v));
-  // Scan the four neighborhood pixels and track their depth spread. A large spread means
-  // the 2x2 cell straddles a depth discontinuity, where blending would smear across an
-  // edge, so fall back to nearest-neighbor in that case.
+  // Check max range difference.
+  bool use_nearest = false;
   float min = std::numeric_limits<float>::max();
   float max = std::numeric_limits<float>::lowest();
   for (size_t i = 0; i < 4; ++i) {
     const auto curr_v = weights.v + v_offset_[i];
     const auto curr_u = weights.u + u_offset_[i];
     if (curr_v < 0 || curr_u < 0 || curr_v >= ranges.rows || curr_u >= ranges.cols) {
-      return weights;  // neighborhood off-image, leave weights invalid
+      continue;
     }
 
     const float range = ranges.at<float>(curr_v, curr_u);
     max = std::max(range, max);
     min = std::min(range, min);
     if (max - min > config.max_depth_difference_m) {
-      // Depth jump across the cell: snap to the nearest pixel instead of blending.
-      Weights new_weights(std::round(u), std::round(v));
-      new_weights.valid = true;
-      return new_weights;
+      use_nearest = true;
+      break;
     }
   }
 
-  // Depth is locally smooth, so plain bilinear interpolation is safe.
+  if (use_nearest) {
+    Weights weights(std::round(u), std::round(v));
+    weights.valid = weights.u >= 0 && weights.u < ranges.cols && weights.v >= 0 &&
+                    weights.v < ranges.rows;
+    return weights;
+  }
+
   return InterpolatorBilinear::computeWeights(u, v, ranges);
 }
 
-float InterpolatorAdaptive::InterpolateRange(const cv::Mat& range_image,
+float InterpolatorAdaptive::interpolateRange(const cv::Mat& range_image,
                                              const Weights& weights) const {
   if (weights.use_bilinear) {
-    return InterpolatorBilinear::InterpolateRange(range_image, weights);
+    return InterpolatorBilinear::interpolateRange(range_image, weights);
   }
 
   return range_image.at<float>(weights.v, weights.u);

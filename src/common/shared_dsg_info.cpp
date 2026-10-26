@@ -34,35 +34,65 @@
  * -------------------------------------------------------------------------- */
 #include "hydra/common/shared_dsg_info.h"
 
+#include <config_utilities/config.h>
+#include <glog/logging.h>
+
+namespace YAML {
+
+template <>
+struct convert<spark_dsg::LayerKey> {
+  static Node encode(const spark_dsg::LayerKey& key) {
+    Node node;
+    node["layer"] = key.layer;
+    node["partition"] = key.partition;
+    return node;
+  }
+
+  static bool decode(const Node& node, spark_dsg::LayerKey& key) {
+    if (node.IsScalar()) {
+      key = node.as<spark_dsg::LayerId>();
+      return true;
+    }
+
+    if (!node["layer"]) {
+      LOG(ERROR) << "Invalid layer key '" << node << "', missing layer!";
+      return false;
+    }
+
+    const spark_dsg::LayerId layer = node["layer"].as<spark_dsg::LayerId>();
+    spark_dsg::PartitionId partition = 0;
+    if (node["partition"]) {
+      partition = node["partition"].as<spark_dsg::PartitionId>();
+    }
+
+    key = {layer, partition};
+    return true;
+  }
+};
+
+}  // namespace YAML
+
 namespace hydra {
 
 using namespace spark_dsg;
 
-SharedDsgInfo::SharedDsgInfo(const std::map<LayerId, char>& layer_id_map)
-    : updated(false), sequence_number(0), layer_prefix_map(layer_id_map) {
-  // collect the layer ids for graph construction while building the inverse
-  // prefix -> layer lookup, so a node's symbol prefix can be mapped back to its layer
-  DynamicSceneGraph::LayerIds layer_ids;
-  for (auto&& [layer, prefix] : layer_id_map) {
-    layer_ids.push_back(layer);
-    prefix_layer_map[prefix] = layer;
-  }
-
-  graph.reset(new DynamicSceneGraph(layer_ids));
+SharedDsgInfo::SharedDsgInfo(const Config& config)
+    : updated(false), sequence_number(0) {
+  graph = DynamicSceneGraph::fromNames(config.layers);
 }
 
-SharedDsgInfo::SharedDsgInfo() {}
-
 SharedDsgInfo::Ptr SharedDsgInfo::clone() const {
-  // deep-copy the graph but read the atomic flag explicitly; the copy is independent so
-  // callers can snapshot the shared graph without holding the lock during downstream use
-  SharedDsgInfo::Ptr other(new SharedDsgInfo());
+  auto other = std::make_shared<SharedDsgInfo>(config);
   other->updated = updated.load();
   other->sequence_number = sequence_number;
   other->graph = graph->clone();
-  other->prefix_layer_map = prefix_layer_map;
-  other->layer_prefix_map = layer_prefix_map;
   return other;
+}
+
+void declare_config(SharedDsgInfo::Config& config) {
+  using namespace config;
+  name("SharedDsgInfo::Config");
+  field(config.layers, "layers");
 }
 
 }  // namespace hydra

@@ -38,23 +38,8 @@
 
 #include "hydra/common/dsg_types.h"
 
-/**
- * @file mst_factors.h
- * @brief Adds the places layer to the deformation graph. Connects places along
- *        a minimum spanning tree of their connectivity and attaches each place
- *        to nearby mesh vertices, so the optimizer deforms the places together
- *        with the mesh.
- */
-
 namespace hydra {
 
-/// @brief Inserts places nodes and factors into the deformation graph.
-/// @param graph Scene graph providing the places layer and their connectivity.
-/// @param timestamp_ns Timestamp associated with the inserted factors (ns).
-/// @param deformation_graph Deformation graph extended with the places and factors.
-/// @param mst_edge_variance Measurement variance for the place-to-place tree edges.
-/// @param mesh_edge_variance Measurement variance for the place-to-mesh edges.
-/// @param prefix_lookup Maps a node id to the symbol prefix used for its deformation-graph key.
 void addPlacesToDeformationGraph(const DynamicSceneGraph& graph,
                                  size_t timestamp_ns,
                                  kimera_pgmo::DeformationGraph& deformation_graph,

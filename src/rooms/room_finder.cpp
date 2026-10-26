@@ -40,10 +40,8 @@
 #include <Eigen/Dense>
 #include <algorithm>
 #include <limits>
-#include <map>
 #include <optional>
 #include <queue>
-#include <set>
 
 #include "hydra/rooms/graph_filtration.h"
 #include "hydra/rooms/room_utilities.h"
@@ -69,11 +67,9 @@ void fillIndexQueue(const SceneGraphLayer& places,
                     size_t min_room_size) {
   for (const auto& id_cluster_pair : clusters) {
     if (id_cluster_pair.second.size() < min_room_size) {
-      continue;  // too small to become a room
+      continue;
     }
 
-    // key each cluster by the timestamp of its oldest member place; the queue then pops
-    // clusters oldest-first so longer-lived rooms get the lower ids
     uint64_t oldest_time_ns = std::numeric_limits<uint64_t>::max();
     for (const auto& place : id_cluster_pair.second) {
       const auto& attrs = places.getNode(place).attributes();
@@ -107,8 +103,6 @@ void logFiltration(std::ostream& fout,
 RoomFinder::RoomFinder(const RoomFinderConfig& config) : config_(config) {}
 
 RoomFinder::~RoomFinder() {
-  // finalize the JSON log: each appended entry left a trailing comma, so back up over
-  // the last one before closing the "contents" array
   if (log_file_) {
     if (logged_once_) {
       const size_t curr_pos = log_file_->tellp();
@@ -121,7 +115,6 @@ RoomFinder::~RoomFinder() {
       graph_log_file_->close();
       graph_log_file_.reset();
 
-      // append an index of where each serialized place graph lives in the .graphs file
       auto& fout = *log_file_;
       fout << ",\"offsets\":[";
       for (size_t i = 0; i < graph_entries_.size(); ++i) {
@@ -163,8 +156,6 @@ void RoomFinder::enableLogging(const std::string& log_path) {
 }
 
 InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) const {
-  // sweep the places layer at increasing dilation, counting components large enough to
-  // be rooms; the tracker also records each component's birth/death (barcode) lifetimes
   BarcodeTracker tracker(config_.min_component_size);
   const auto filtration = getGraphFiltration(
       places,
@@ -183,7 +174,6 @@ InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) con
 
   VLOG(10) << "[RoomFinder] Filtration: " << filtration;
 
-  // restrict threshold search to the configured dilation band
   auto window = getTrimmedFiltration(filtration,
                                      config_.min_dilation_m,
                                      config_.max_dilation_m,
@@ -192,8 +182,6 @@ InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) con
     return {};
   }
 
-  // if clipping to the peak produced too narrow a band to be meaningful, recompute the
-  // window without the clip so threshold selection still has room to work
   if (config_.clip_dilation_window_to_max) {
     const double window_size =
         filtration[window.second].distance - filtration[window.first].distance;
@@ -212,8 +200,6 @@ InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) con
           << config_.max_dilation_m << "],  window: [" << window.first << ", "
           << window.second << "]";
 
-  // pick the dilation threshold within the window according to the configured strategy
-  // (longest constant run, longest barcode lifetime, or best plateau)
   std::optional<FiltrationInfo> candidate = std::nullopt;
   switch (config_.dilation_threshold_mode) {
     case DilationThresholdMode::REPEATED:
@@ -262,8 +248,6 @@ InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) con
     logged_once_ = true;
   }
 
-  // extract connected components at the chosen threshold: a node/edge is kept only if its
-  // distance/weight clears info.distance, so each component is a candidate room
   const auto components = graph_utilities::getConnectedComponents(
       places,
       [&](const SceneGraphNode& node) {
@@ -271,7 +255,6 @@ InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) con
       },
       [&](const SceneGraphEdge& edge) { return edge.info->weight > info.distance; });
 
-  // drop components too small to be rooms
   InitialClusters filtered;
   for (const auto& component : components) {
     if (component.size() < config_.min_component_size) {
@@ -287,14 +270,12 @@ InitialClusters RoomFinder::getBestComponents(const SceneGraphLayer& places) con
 SceneGraphLayer::Ptr RoomFinder::findRooms(const SceneGraphLayer& places) {
   VLOG(2) << "[Room Finder] Detecting rooms for " << places.numNodes() << " nodes";
 
-  // seed clusters: the connected components surviving the chosen dilation threshold
   const auto components = getBestComponents(places);
   if (components.empty()) {
     VLOG(2) << "[Room Finder] No rooms found";
     return nullptr;
   }
 
-  // expand the seed components to cover all places via the configured clustering method
   last_results_.clear();
   switch (config_.clustering_mode) {
     case RoomClusterMode::MODULARITY:
@@ -321,7 +302,6 @@ SceneGraphLayer::Ptr RoomFinder::findRooms(const SceneGraphLayer& places) {
       break;
   }
 
-  // if clustering reported failure, fall back to the raw seed components
   if (!last_results_.valid) {
     LOG(WARNING) << "[Room Finder] clustering failed: using components";
     last_results_.fillFromInitialClusters(components);
@@ -332,14 +312,12 @@ SceneGraphLayer::Ptr RoomFinder::findRooms(const SceneGraphLayer& places) {
 }
 
 SceneGraphLayer::Ptr RoomFinder::makeRoomLayer(const SceneGraphLayer& places) {
-  IsolatedSceneGraphLayer::Ptr rooms(new IsolatedSceneGraphLayer(DsgLayers::ROOMS));
+  SceneGraphLayer::Ptr rooms(new SceneGraphLayer(DsgLayers::ROOMS));
 
   // organize rooms by their oldest place
   IndexTimePairQueue queue;
   fillIndexQueue(places, last_results_.clusters, queue, config_.min_room_size);
 
-  // assign room ids in oldest-place-first order so ids stay stable as the graph grows
-  // (the queue is a min-heap on each cluster's oldest place timestamp)
   NodeSymbol room_id(config_.room_prefix, 0);
   while (!queue.empty()) {
     const auto cluster_index = queue.top().index;
@@ -349,9 +327,8 @@ SceneGraphLayer::Ptr RoomFinder::makeRoomLayer(const SceneGraphLayer& places) {
     const auto& cluster = last_results_.clusters.at(cluster_index);
 
     auto attrs = std::make_unique<RoomNodeAttributes>();
-    // TODO: define unknown label somewhere
+    // TODO(nathan) define unknown label somewhere
     attrs->semantic_label = 0;
-    attrs->name = room_id.getLabel();
     attrs->position = getRoomPosition(places, cluster);
 
     rooms->emplaceNode(room_id, std::move(attrs));
@@ -374,85 +351,64 @@ void RoomFinder::addRoomPlaceEdges(DynamicSceneGraph& graph) const {
       continue;
     }
 
-    graph.insertParentEdge(room->second, id_node_pair.first);
+    // add edge enforcing parent invariants
+    graph.insertEdge(room->second, id_node_pair.first, nullptr, true);
   }
 }
 
-void RoomFinder::addRoomArchetypeEdges(DynamicSceneGraph& graph) const {
-  if (!graph.hasLayer(DsgLayers::ARCHETYPES)) {
+void RoomFinder::addRoomChildEdges(DynamicSceneGraph& graph,
+                                   const std::string& child_layer,
+                                   const std::string& places_layer) const {
+  const auto children = graph.findLayer(child_layer);
+  const auto places = graph.findLayer(places_layer);
+  const auto rooms = graph.findLayer(DsgLayers::ROOMS);
+  if (!children || !places || !rooms) {
     return;
   }
-  const auto& archetype_layer = graph.getLayer(DsgLayers::ARCHETYPES);
-  const auto& place_layer = graph.getLayer(DsgLayers::PLACES);
 
-  // wire each archetype to one room by majority vote of its member places' rooms,
-  // falling back to nearest room by centroid when no member has a room assignment
-  size_t added = 0;
-  size_t archetypes_no_room = 0;
-  size_t archetypes_unlabeled_only = 0;
-  for (const auto& [archetype_id, archetype_node] : archetype_layer.nodes()) {
-    // Tally rooms across the archetype's labeled member places.
-    std::map<NodeId, int> room_votes;
-    int unlabeled_members = 0;
-    for (const auto child_id : archetype_node->children()) {
-      if (!place_layer.hasNode(child_id)) {
+  for (const auto& [child_id, child] : children->nodes()) {
+    std::map<NodeId, size_t> votes;
+    for (const auto place_id : child->children()) {
+      if (!places->hasNode(place_id)) {
         continue;
       }
-      const auto cluster = last_results_.labels.find(child_id);
+
+      const auto cluster = last_results_.labels.find(place_id);
       if (cluster == last_results_.labels.end()) {
-        ++unlabeled_members;
         continue;
       }
+
       const auto room = cluster_room_map_.find(cluster->second);
-      if (room == cluster_room_map_.end()) {
-        continue;
+      if (room != cluster_room_map_.end()) {
+        ++votes[room->second];
       }
-      ++room_votes[room->second];
     }
 
-    if (room_votes.empty()) {
-      // Fallback: nearest room by archetype centroid.
-      const Eigen::Vector3d& arch_pos = archetype_node->attributes().position;
-      std::optional<NodeId> nearest_room;
+    std::optional<NodeId> parent;
+    if (!votes.empty()) {
+      parent = std::max_element(votes.begin(),
+                                votes.end(),
+                                [](const auto& lhs, const auto& rhs) {
+                                  return lhs.second < rhs.second;
+                                })
+                   ->first;
+    } else {
+      const Eigen::Vector3d pos = child->attributes().position;
       double best_dist_sq = std::numeric_limits<double>::infinity();
-      for (const auto& [room_id, room_node] :
-           graph.getLayer(DsgLayers::ROOMS).nodes()) {
-        const double d2 =
-            (room_node->attributes().position - arch_pos).squaredNorm();
-        if (d2 < best_dist_sq) {
-          best_dist_sq = d2;
-          nearest_room = room_id;
+      for (const auto& [room_id, room] : rooms->nodes()) {
+        const double dist_sq = (room->attributes().position - pos).squaredNorm();
+        if (dist_sq < best_dist_sq) {
+          best_dist_sq = dist_sq;
+          parent = room_id;
         }
       }
-      if (!nearest_room) {
-        ++archetypes_no_room;
-        continue;
-      }
-      ++archetypes_unlabeled_only;
-      graph.insertParentEdge(*nearest_room, archetype_id);
-      ++added;
-      continue;
     }
 
-    // Pick the room with the most member-place votes.
-    NodeId winner = room_votes.begin()->first;
-    int winner_votes = room_votes.begin()->second;
-    for (const auto& [room_id, votes] : room_votes) {
-      if (votes > winner_votes) {
-        winner = room_id;
-        winner_votes = votes;
-      }
-    }
-    graph.insertParentEdge(winner, archetype_id);
-    ++added;
-    if (unlabeled_members > 0) {
-      ++archetypes_unlabeled_only;  // had labeled and unlabeled, partially recovered
+    if (parent) {
+      // add edge enforcing parent invariants
+      graph.insertEdge(*parent, child_id, nullptr, true);
     }
   }
-  LOG(INFO) << "[Rooms] addRoomArchetypeEdges: archetypes="
-            << archetype_layer.numNodes() << " added=" << added
-            << " archetypes_no_room=" << archetypes_no_room
-            << " archetypes_with_unlabeled_members=" << archetypes_unlabeled_only;
 }
 
 void RoomFinder::fillClusterMap(const SceneGraphLayer& places,

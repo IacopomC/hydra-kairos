@@ -41,28 +41,10 @@
 #include <sstream>
 #include <string>
 
-/**
- * @file display_utilities.h
- * @brief Helpers for turning numeric and node-id data into compact human-readable
- *        strings for logging and debugging.
- */
-
 namespace hydra {
 
-/// @brief Format a byte count as a human-readable size string.
-/// @param bytes Size in bytes.
-/// @return The size scaled to a convenient unit.
 std::string getHumanReadableMemoryString(size_t bytes);
 
-/// @brief Format a dynamic vector as a string, abbreviating long vectors.
-/// Vectors with at most max_size entries are printed in full; longer vectors show the
-/// first and last num_to_show entries with an ellipsis between them.
-/// @tparam Scalar Element type of the vector.
-/// @param vector Vector to format.
-/// @param precision Number of digits printed per element.
-/// @param max_size Length above which the vector is abbreviated.
-/// @param num_to_show Entries shown from each end when abbreviating.
-/// @return The formatted string.
 template <typename Scalar>
 std::string showVector(const Eigen::Matrix<Scalar, Eigen::Dynamic, 1>& vector,
                        int precision = 3,
@@ -82,13 +64,6 @@ std::string showVector(const Eigen::Matrix<Scalar, Eigen::Dynamic, 1>& vector,
   ss << "[" << vector.head(num_to_show).format(format) << ", ..., "
      << vector.tail(num_to_show).format(format) << "]";
   return ss.str();
-}
-
-/// @brief Format a node id as its symbolic label.
-/// @param id Node id to format.
-/// @return The label string for the node symbol.
-inline std::string printNodeId(spark_dsg::NodeId id) {
-  return spark_dsg::NodeSymbol(id).getLabel();
 }
 
 }  // namespace hydra

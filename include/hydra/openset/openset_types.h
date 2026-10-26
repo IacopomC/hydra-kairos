@@ -36,23 +36,15 @@
 #include <Eigen/Dense>
 #include <map>
 
-/**
- * @file openset_types.h
- * @brief Common type aliases for open-vocabulary semantic feature embeddings.
- *        Defines the vector representation of a single embedding, a collection
- *        of embeddings packed as matrix columns, and a keyed map of embeddings.
- */
-
 namespace hydra {
 
-/// @brief Single semantic embedding stored as a column vector of floats.
+//! Single embedding or feature column vector
 using FeatureVector = Eigen::VectorXf;
 
-/// @brief Several embeddings packed as the columns of a single matrix.
+//! Multiple features as column vectors
 using FeatureGroup = Eigen::MatrixXf;
 
-/// @brief Association from a key to its embedding.
-/// @tparam Key Type used to index embeddings.
+//! Map between some sort of key and a feature
 template <typename Key>
 using FeatureMap = std::map<Key, FeatureVector>;
 

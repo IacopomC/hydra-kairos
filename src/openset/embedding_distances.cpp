@@ -47,12 +47,8 @@ float LerfScore::score(const FeatureVector& lhs, const FeatureVector& rhs) const
   const CosineDistance dot_prod(dot_config);
   // score maps to cosine similiarity (for CosineDistance norm)
   const auto l_dot_r = std::exp(dot_prod.score(lhs, rhs));
-  // exponentiated cosine similarity of the query against every reference
-  // (canonical) embedding; each forms a two-way softmax against l_dot_r
   const auto scores = cannonical_->getScores(dot_prod, lhs);
   const auto divisor = (scores.array().exp() + l_dot_r);
-  // softmax weight of the query relative to each reference; the worst (smallest)
-  // is returned, so the score is high only if the query beats every reference
   return (l_dot_r / divisor).minCoeff();
 }
 

@@ -40,9 +40,6 @@ Eigen::VectorXf EmbeddingGroup::getScores(const EmbeddingDistance& dist,
 
 ScoreResult EmbeddingGroup::getBestScore(const EmbeddingDistance& dist,
                                          const FeatureVector& embedding) const {
-  // argmax over the group: keep the most similar reference (highest score). The
-  // result starts at the lowest float, so the first embedding always wins ties
-  // against the initial value and a non-empty group yields a real index.
   ScoreResult result;
   for (size_t i = 0; i < embeddings.size(); ++i) {
     const auto score = dist.score(embeddings[i], embedding);

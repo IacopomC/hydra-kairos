@@ -61,12 +61,9 @@ bool BarcodeTracker::doUnion(DisjointSet& components,
 
   // note that this works: nothing in disjoint set relies on lhs and rhs, just their
   // parents
-  // keep the representative whose seed distance is larger (it appeared earlier in the
-  // filtration order) so the surviving component carries the older birth distance
   const auto rhs_better = node_distances.at(rhs_set) >= node_distances.at(lhs_set);
   const auto erased = components.doUnion(lhs_set, rhs_set, rhs_better);
   if (!erased) {
-    // already in the same component: no merge happened
     return false;
   }
 
@@ -76,8 +73,6 @@ bool BarcodeTracker::doUnion(DisjointSet& components,
     std::swap(lhs_set, rhs_set);
   }
 
-  // the merged component (lhs_set survives) may have just crossed the size threshold:
-  // open a barcode bar for it, born at distance 0 and still alive (end = this distance)
   auto liter = barcodes.find(lhs_set);
   const auto new_size = components.sizes.at(lhs_set);
   if (liter == barcodes.end() && new_size >= min_component_size) {
@@ -85,8 +80,6 @@ bool BarcodeTracker::doUnion(DisjointSet& components,
     liter = barcodes.emplace(lhs_set, ComponentLifetime{0.0, distance}).first;
   }
 
-  // rhs_set was absorbed: its bar dies here, so record this distance as its (later)
-  // start point. note start/end are stored reversed relative to dilation direction
   auto riter = barcodes.find(rhs_set);
   if (riter != barcodes.end()) {
     // mark exit of component
@@ -149,14 +142,11 @@ void fillEntries(const SceneGraphLayer& layer,
                  bool include_nodes) {
   entries.reserve(layer.edges().size() + layer.nodes().size());
 
-  // each edge becomes an entry keyed on its weight (the dilation at which it appears)
   for (const auto& id_edge_pair : layer.edges()) {
     const auto& edge = id_edge_pair.second;
     entries.push_back({edge.info->weight, edge.source, edge.target});
   }
 
-  // record every node's free-space distance; optionally add nodes as entries too so the
-  // filtration also tracks when nodes themselves enter (vs. seeding them up front)
   for (auto&& [id, node] : layer.nodes()) {
     const auto distance = node->attributes<PlaceNodeAttributes>().distance;
     node_distances.emplace(id, distance);
@@ -166,8 +156,6 @@ void fillEntries(const SceneGraphLayer& layer,
     }
   }
 
-  // build a max-heap on distance; pop_heap then yields entries in descending distance
-  // (largest dilation first) as the filtration is swept
   std::make_heap(entries.begin(), entries.end());
 }
 
@@ -181,8 +169,6 @@ bool updateComponentsFromEdge(NodeId source,
   const bool has_source = components.hasSet(source);
   const bool has_target = components.hasSet(target);
 
-  // an edge can be popped before one of its endpoints has entered the disjoint set;
-  // stash it under each missing endpoint so it can be retried once that node arrives
   if (!has_source) {
     auto iter = unused_edges.find(source);
     if (iter == unused_edges.end()) {
@@ -200,11 +186,9 @@ bool updateComponentsFromEdge(NodeId source,
   }
 
   if (!has_source || !has_target) {
-    // endpoint missing: edge deferred, no component change yet
     return false;
   }
 
-  // both endpoints present: merge their components at this dilation
   tracker.doUnion(components, node_distances, source, target, edge_distance);
   return true;
 }
@@ -291,14 +275,12 @@ Filtration getGraphFiltration(const SceneGraphLayer& layer,
 
   std::list<FiltrationInfo> filtration;
   while (!entries.empty()) {
-    // pop the next entry in descending-distance order (largest dilation first)
     std::pop_heap(entries.begin(), entries.end());
     const auto x = entries.back();
     entries.pop_back();
 
     VLOG(10) << "Processing " << x;
 
-    // an entry with a target is an edge (potential merge); otherwise it is a node entry
     bool change_in_components = true;
     if (x.target) {
       change_in_components = updateComponentsFromEdge(x.source,
@@ -314,7 +296,6 @@ Filtration getGraphFiltration(const SceneGraphLayer& layer,
     }
 
     if (!change_in_components) {
-      // deferred edge or no-op merge: component count is unchanged, skip recording
       continue;
     }
 
@@ -326,8 +307,6 @@ Filtration getGraphFiltration(const SceneGraphLayer& layer,
     }
 
     // this may help smooth the resulting filtration a little
-    // entries within diff_threshold_m of the last recorded distance collapse onto that
-    // sample (just overwrite its count) instead of adding a near-duplicate point
     const double diff_m = std::abs(filtration.front().distance - x.distance);
     if (diff_m < diff_threshold_m) {
       filtration.front().num_components = num_components;
@@ -348,8 +327,6 @@ std::pair<size_t, size_t> getTrimmedFiltration(const Filtration& filtration,
   size_t start_index = 0;
   size_t end_index = filtration.size();
 
-  // scan once to find the [min_dilation_m, max_dilation_m] index window and, within it,
-  // the location of the peak component count
   size_t max_value = 0;
   size_t max_index = filtration.size();
   for (size_t i = 0; i < filtration.size(); ++i) {
@@ -371,7 +348,6 @@ std::pair<size_t, size_t> getTrimmedFiltration(const Filtration& filtration,
   }
 
   // if peak occurs before end of window, return window through peak instead
-  // (trims the tail so threshold selection stops at the most-fragmented dilation)
   if (clip_to_max && max_index < end_index) {
     end_index = max_index + 1;
   }
@@ -394,8 +370,6 @@ std::optional<FiltrationInfo> getLongestSequence(const Filtration& values,
     return std::nullopt;
   }
 
-  // walk the window tracking the longest run of consecutive samples that share the same
-  // component count; best_start marks where the current best run began
   size_t best_start = 0;
   size_t best_count = 0;
 
@@ -411,7 +385,7 @@ std::optional<FiltrationInfo> getLongestSequence(const Filtration& values,
       continue;
     }
 
-    // run ended at a count change: commit it if it beats the best seen, then restart
+    // we've broken the sequence
     if (count > best_count) {
       best_count = count;
       best_start = start;
@@ -421,7 +395,6 @@ std::optional<FiltrationInfo> getLongestSequence(const Filtration& values,
     count = 1;
   }
 
-  // flush the final run (the loop above only commits a run when the next one starts)
   if (count > best_count) {
     best_count = count;
     best_start = start;
@@ -450,8 +423,6 @@ size_t getMedianComponents(const Filtration& values,
 
 double computeTotalLifetime(const std::vector<ComponentLifetime>& lifetimes,
                             double distance) {
-  // sum the spans of every barcode bar that is alive at this dilation, so a dilation
-  // sitting inside many long-lived components scores high
   double curr_lifetime = 0.0;
   for (const auto& lifetime : lifetimes) {
     if (distance < lifetime.start || distance > lifetime.end) {
@@ -477,8 +448,6 @@ std::optional<FiltrationInfo> getLongestLifetimeDilation(const Filtration& value
     end_index = values.size();
   }
 
-  // keep only barcode bars that overlap the window and live at least the minimum span;
-  // these are the components that vote on which dilation to pick
   const double start_distance = values[start_index].distance;
   const double end_distance = values[end_index].distance;
   std::vector<ComponentLifetime> filtered_lifetimes;
@@ -499,8 +468,6 @@ std::optional<FiltrationInfo> getLongestLifetimeDilation(const Filtration& value
     filtered_lifetimes.push_back(lifetime);
   }
 
-  // target the most stable component count: the count of the longest constant run, or
-  // the median count if no run dominates
   auto longest_index_start = getLongestSequence(values, start_index, end_index);
   size_t num_components;
   if (longest_index_start) {
@@ -509,8 +476,6 @@ std::optional<FiltrationInfo> getLongestLifetimeDilation(const Filtration& value
     num_components = getMedianComponents(values, start_index, end_index);
   }
 
-  // among samples that hit the target count, pick the dilation with the most total
-  // living lifetime (most confidently inside long-lived components)
   double best_lifetime = 0.0;
   std::optional<size_t> best_index = std::nullopt;
   for (size_t i = start_index; i < end_index; ++i) {
@@ -550,8 +515,6 @@ std::optional<FiltrationInfo> getBestPlateau(const Filtration& values,
     return std::nullopt;
   }
 
-  // run-length-encode the window into plateaus: each plateau is a maximal run of equal
-  // component counts, stored as [first_index, last_index] with its shared count
   std::vector<size_t> seq_values{values[start_index].num_components};
   std::vector<std::pair<size_t, size_t>> sequences{{start_index, start_index}};
   for (size_t i = start_index + 1; i < end_index; ++i) {
@@ -563,7 +526,6 @@ std::optional<FiltrationInfo> getBestPlateau(const Filtration& values,
     }
   }
 
-  // a plateau's lifetime is the dilation span it covers (how stable that count is)
   std::vector<double> lifetimes;
   for (const auto& start_end_pair : sequences) {
     lifetimes.push_back(values[start_end_pair.second].distance -
@@ -579,16 +541,12 @@ std::optional<FiltrationInfo> getBestPlateau(const Filtration& values,
     }
   }
 
-  // threshold a plateau must clear to be eligible: either an absolute span (use_threshold)
-  // or a fraction of the longest plateau's span
   CHECK(!lifetimes.empty());
   const double max_lifetime = *std::max_element(lifetimes.begin(), lifetimes.end());
   const double threshold = use_threshold ? ratio : ratio * max_lifetime;
   VLOG(5) << "[Room Finder] Max lifetime: " << max_lifetime << ", Ratio: " << ratio
           << ", Threshold: " << threshold;
 
-  // among plateaus that clear the threshold, choose the one with the highest component
-  // count (finest room partition that is still stable enough)
   size_t best_sequence = 0;
   size_t best_components = 0;
   VLOG(20) << "Best components:";
@@ -602,7 +560,7 @@ std::optional<FiltrationInfo> getBestPlateau(const Filtration& values,
     const auto curr_components = values[sequences[i].first].num_components;
     VLOG(20) << "  - " << i << ": components=" << curr_components
              << " (best=" << best_components << ")";
-    // TODO: might want >= instead
+    // TODO(nathan) might want >= instead
     if (curr_components > best_components) {
       best_sequence = i;
       best_components = curr_components;

@@ -34,75 +34,61 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 #include <gtsam/nonlinear/Values.h>
+#include <kimera_pgmo/mesh_offset_info.h>
 
 #include "hydra/backend/merge_proposer.h"
-#include "hydra/common/dsg_types.h"
+#include "hydra/common/dsg_types.h"  // IWYU pragma: keep
 #include "hydra/common/shared_dsg_info.h"
-
-/**
- * @file update_functions.h
- * @brief Base interface for the per-layer update functors the backend runs
- *        after optimization. Defines the per-iteration context shared with the
- *        functors and the optional cleanup and attribute-merge hooks they can
- *        expose.
- */
 
 namespace kimera_pgmo {
 class DeformationGraph;
-}
+}  // namespace kimera_pgmo
 
 namespace hydra {
 
-/// @brief Per-iteration context passed to every update functor.
 struct UpdateInfo {
   using Ptr = std::shared_ptr<UpdateInfo>;
   using ConstPtr = std::shared_ptr<const UpdateInfo>;
-  /// @brief Externally supplied merges grouped by the layer they apply to.
   using LayerMerges = std::map<LayerId, MergeList>;
 
-  const gtsam::Values* places_values = nullptr;  ///< Optimized poses for the places layer, if available.
-  const gtsam::Values* pgmo_values = nullptr;    ///< Optimized mesh/agent poses from the optimizer.
-  bool loop_closure_detected = false;            ///< Whether a loop closure triggered this iteration.
-  uint64_t timestamp_ns = 0;                     ///< Timestamp of this iteration (ns).
-  LayerMerges given_merges;                      ///< Externally supplied merges to apply this iteration.
-  const gtsam::Values* complete_agent_values = nullptr;  ///< Optimized poses for all agent nodes.
-  kimera_pgmo::DeformationGraph* deformation_graph = nullptr;  ///< Deformation graph for non-optimized interpolation.
-  const std::unordered_map<NodeId, size_t>* node_to_robot_id = nullptr;  ///< Maps a node to the robot that owns it.
+  uint64_t timestamp_ns = 0;
+  const gtsam::Values* places_values = nullptr;
+  const gtsam::Values* pgmo_values = nullptr;
+  bool loop_closure_detected = false;
+  //! External merges (e.g., from GNC)
+  LayerMerges given_merges = {};
+  // TODO(nathan) flip to const when we have mutable state
+  kimera_pgmo::DeformationGraph* deformation_graph = nullptr;
+  //! Mapping between nodes and robots
+  const std::unordered_map<NodeId, size_t>* node_to_robot_id = nullptr;
+  //! Archival information for mesh
+  kimera_pgmo::MeshOffsetInfo mesh_offsets = {};
+  //! Current deformation graph, set on every update (unlike deformation_graph, which
+  //! is only set when the update follows an optimization)
+  const kimera_pgmo::DeformationGraph* current_deformation_graph = nullptr;
 };
 
-/// @brief Callback that performs post-update cleanup on a layer.
 using LayerCleanupFunc =
     std::function<void(const UpdateInfo::ConstPtr&, SharedDsgInfo*)>;
-/// @brief Callback that synthesizes the attributes of a merged node from its members.
+using FindMergeFunc =
+    std::function<MergeList(const DynamicSceneGraph&, const UpdateInfo::ConstPtr&)>;
 using MergeFunc = std::function<NodeAttributes::Ptr(const DynamicSceneGraph&,
                                                     const std::vector<NodeId>&)>;
 
-/// @brief Base class for the per-layer update steps the backend runs after optimization.
 struct UpdateFunctor {
   using Ptr = std::shared_ptr<UpdateFunctor>;
 
-  /// @brief Optional callbacks a functor exposes to the backend.
   struct Hooks {
-    LayerCleanupFunc cleanup;  ///< Cleanup callback, empty if unused.
-    MergeFunc merge;           ///< Attribute-merge callback, empty if unused.
+    LayerCleanupFunc cleanup;
+    FindMergeFunc find_merges;
+    MergeFunc merge;
   };
 
   virtual ~UpdateFunctor() = default;
-  /// @brief Returns the functor's hooks; the base implementation returns none.
   virtual Hooks hooks() const;
-  /// @brief Applies this functor's update to the graph.
-  /// @param unmerged Graph holding the original, unmerged nodes.
-  /// @param dsg Shared graph to update.
-  /// @param info Per-iteration context.
   virtual void call(const DynamicSceneGraph& unmerged,
                     SharedDsgInfo& dsg,
                     const UpdateInfo::ConstPtr& info) const = 0;
-  /// @brief Proposes merges for this functor's layer; the base returns none.
-  /// @param graph Graph to search for merges.
-  /// @param info Per-iteration context.
-  /// @return Proposed merges.
-  virtual MergeList findMerges(const DynamicSceneGraph& graph,
-                               const UpdateInfo::ConstPtr& info) const;
 };
 
 }  // namespace hydra

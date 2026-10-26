@@ -59,7 +59,6 @@ PipelineQueues::~PipelineQueues() {
 }
 
 PipelineQueues& PipelineQueues::instance() {
-  // lazily construct the singleton on first access
   if (!s_instance_) {
     s_instance_.reset(new PipelineQueues());
   }
@@ -81,8 +80,6 @@ void PipelineQueues::clear() {
 }
 
 PipelineQueues::PipelineQueues() {
-  // only allocate the loop-closure queue when LCD is enabled; the bow queue is left
-  // null until something opts into bag-of-words input, so consumers must null-check
   const auto& info = hydra::GlobalInfo::instance();
   if (info.getConfig().enable_lcd) {
     lcd_queue.reset(new LcdQueue());

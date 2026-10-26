@@ -55,8 +55,6 @@ void UpdateBuildingsFunctor::call(const DynamicSceneGraph&,
   const NodeSymbol building_id('B', 0);
   const auto& rooms = dsg.graph->getLayer(DsgLayers::ROOMS);
 
-  // A single building node summarizes all rooms. With no rooms it should not
-  // exist, so remove any stale one and stop.
   if (!rooms.numNodes()) {
     if (dsg.graph->hasNode(building_id)) {
       dsg.graph->removeNode(building_id);
@@ -65,27 +63,24 @@ void UpdateBuildingsFunctor::call(const DynamicSceneGraph&,
     return;
   }
 
-  // Place the building at the centroid of its rooms.
   Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
   for (const auto& id_node_pair : rooms.nodes()) {
     centroid += id_node_pair.second->attributes().position;
   }
   centroid /= rooms.numNodes();
 
-  // Create the building node on first sight, otherwise just move it.
   if (!dsg.graph->hasNode(building_id)) {
     SemanticNodeAttributes::Ptr attrs(new SemanticNodeAttributes());
     attrs->position = centroid;
     attrs->semantic_label = config.semantic_label;
-    attrs->name = building_id.getLabel();
     dsg.graph->emplaceNode(DsgLayers::BUILDINGS, building_id, std::move(attrs));
   } else {
     dsg.graph->getNode(building_id).attributes().position = centroid;
   }
 
-  // Re-parent every room under the building (no-op for already-linked rooms).
   for (const auto& id_node_pair : rooms.nodes()) {
-    dsg.graph->insertParentEdge(building_id, id_node_pair.first);
+    // add an edge while enforcing single parent
+    dsg.graph->insertEdge(building_id, id_node_pair.first, nullptr, true);
   }
 }
 

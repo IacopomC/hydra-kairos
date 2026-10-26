@@ -35,41 +35,33 @@
 #pragma once
 #include <spark_dsg/layer_view.h>
 
-#include "hydra/common/dsg_types.h"
-
-/**
- * @file active_window_tracker.h
- * @brief Tracks which scene graph nodes fall inside the active window so they can be
- *        iterated as a layer view. A node stays in the window from the moment it
- *        becomes active until it has been archived and explicitly cleared, which keeps
- *        just-archived nodes visible for one more pass.
- */
-
 namespace hydra {
 
-/// @brief Exposes a filtered view over nodes that are currently active or were active
-/// when last seen and have not yet been cleared.
+/**
+ * @brief class that exposes an iterator over nodes that are active or have just been
+ * archived
+ */
 struct ActiveWindowTracker {
-  using Ptr = std::unique_ptr<ActiveWindowTracker>;  ///< Owning pointer alias.
+  using Ptr = std::unique_ptr<ActiveWindowTracker>;
 
-  /// @brief Build a view over the active window of the given layer.
-  /// The view filters to active nodes plus nodes that became inactive since the last
-  /// call but have not been cleared. Removed nodes are pruned from internal state unless
-  /// frozen.
-  /// @param layer Layer to view.
-  /// @param freeze If true, internal tracking state is left untouched by this call.
-  /// @return A layer view restricted to the active window.
-  spark_dsg::LayerView view(const SceneGraphLayer& layer, bool freeze = false) const;
-  /// @brief Drop the just-archived nodes from the window so they no longer iterate.
+  /**
+   * @brief Get iterator over active window (active nodes plus just-archived nodes)
+   */
+  spark_dsg::LayerView view(const spark_dsg::SceneGraphLayer& layer,
+                            bool freeze = false) const;
+  /**
+   * @brief Remove all archived nodes from iteration
+   */
   void clear();
-  /// @brief Forget all tracked nodes and reset to an empty window.
+  /**
+   * @brief Fully reset state
+   */
   void reset();
 
  private:
-  /// @brief Decide whether a node belongs in the active window, updating tracking state.
-  bool isActive(const SceneGraphNode& node, bool freeze = false) const;
-  mutable std::set<NodeId> to_clear_;     ///< Archived nodes still shown until cleared.
-  mutable std::set<NodeId> prev_active_;  ///< Nodes seen active on a previous view call.
+  bool isActive(const spark_dsg::SceneGraphNode& node, bool freeze = false) const;
+  mutable std::set<spark_dsg::NodeId> to_clear_;
+  mutable std::set<spark_dsg::NodeId> prev_active_;
 };
 
 }  // namespace hydra

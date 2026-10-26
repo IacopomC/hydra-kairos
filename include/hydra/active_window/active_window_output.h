@@ -43,53 +43,65 @@
 #include "hydra/input/input_packet.h"
 #include "hydra/reconstruction/volumetric_map.h"
 
-/**
- * @file active_window_output.h
- * @brief The packet the active window emits each pass: the body pose, sensor
- *        data, scene-graph updates, archived mesh blocks, and the current map.
- */
-
 namespace hydra {
 
-/// @brief One active-window update handed downstream to the frontend.
 struct ActiveWindowOutput {
   using Ptr = std::shared_ptr<ActiveWindowOutput>;
 
   ActiveWindowOutput() = default;
   virtual ~ActiveWindowOutput() = default;
 
-  uint64_t timestamp_ns;  ///< Timestamp of this update.
-  Eigen::Vector3d world_t_body;  ///< Translation component of the body pose.
-  Eigen::Quaterniond world_R_body;  ///< Rotation component of the body pose.
-  std::shared_ptr<InputData> sensor_data;  ///< Sensor data from the last update.
-  GraphUpdate graph_update;  ///< New nodes/edges to add to the scene graph.
-  spatial_hash::BlockIndices archived_mesh_indices;  ///< Mesh blocks archived on this pass.
+  //! Timestamp of update
+  uint64_t timestamp_ns;
+  //! Translation component of body pose
+  Eigen::Vector3d world_t_body;
+  //! Rotation component of body pose
+  Eigen::Quaterniond world_R_body;
+  //! Sensor data from last update
+  std::shared_ptr<InputData> sensor_data;
+  //! New nodes to add to the scene graph
+  GraphUpdate graph_update;
+  //! Archived mesh blocks on this pass
+  spatial_hash::BlockIndices archived_mesh_indices;
 
-  /// @brief Get the current volumetric map.
+  /**
+   * @brief Get the current volumetric map
+   */
   const VolumetricMap& map() const;
 
-  /// @brief Set the output volumetric map by copying the input.
+  /**
+   * @brief Sets the output volumetric map (by copying the input)
+   */
   void setMap(const VolumetricMap& map);
 
-  /// @brief Set the output volumetric map without copying (shares ownership).
+  /**
+   * @brief Sets the output volumetric map (without copying)
+   */
   void setMap(const std::shared_ptr<VolumetricMap>& map);
 
-  /// @brief Collate another active-window output into this one.
-  /// @param msg Message to merge in (left invalid after this call).
-  /// @param clone_map Copy the other map if this message has no map set.
+  /**
+   * @brief Collate the other active window output into this
+   * @param msg Message to add to this one (is invalid after this call)
+   * @param clone_map Explicitly copy the other map if the map for this message is not
+   * set
+   */
   virtual void updateFrom(ActiveWindowOutput&& msg, bool clone_map);
 
-  /// @brief Construct an output packet from the input to the active window.
+  /**
+   * @brief Construct an output packet from the input to the active window
+   */
   static Ptr fromInput(const InputPacket& input);
 
-  /// @brief Body pose from when this packet was created, as an isometry.
+  /*
+   * @brief Get the body pose from when this packet was created
+   */
   template <typename T = double>
   Eigen::Transform<T, 3, Eigen::Isometry> world_T_body() const {
     return Eigen::Translation<T, 3>(world_t_body.cast<T>()) * world_R_body.cast<T>();
   }
 
  protected:
-  std::shared_ptr<VolumetricMap> map_;  ///< The volumetric map carried with this output.
+  std::shared_ptr<VolumetricMap> map_;
 };
 
 }  // namespace hydra

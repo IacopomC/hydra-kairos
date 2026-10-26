@@ -65,19 +65,16 @@ ImageInputPacket::ImageInputPacket(uint64_t stamp, const std::string& sensor_nam
     : SensorInputPacket(stamp, sensor_name) {}
 
 bool ImageInputPacket::fillInputDataImpl(InputData& msg) const {
-  // Depth is mandatory for image input.
   if (depth.empty()) {
     LOG(ERROR) << "Missing required images: depth image must be set.";
     return false;
   }
 
-  // At least one source of semantics (color to decode, or explicit labels).
   if (color.empty() && labels.empty()) {
     LOG(ERROR) << "Missing required images: color or label image must be set.";
     return false;
   }
 
-  // Internally color is stored as RGB, so convert if the source is BGR.
   msg.color_image = color;
   if (color_is_bgr && !msg.color_image.empty()) {
     cv::cvtColor(msg.color_image, msg.color_image, cv::COLOR_BGR2RGB);
@@ -85,10 +82,9 @@ bool ImageInputPacket::fillInputDataImpl(InputData& msg) const {
 
   msg.depth_image = depth;
   msg.label_image = labels;
-  // TODO: think about better copy
+  // TODO(nathan) think about better copy
   msg.label_features = label_features;
 
-  // Label and color images, when present, must align with the depth image.
   if (!msg.label_image.empty() && !sizesMatch(msg.depth_image, msg.label_image)) {
     LOG(ERROR) << "Label dimensions " << showImageDim(msg.label_image)
                << " do not match depth dimensions " << showImageDim(msg.depth_image);
@@ -108,7 +104,6 @@ CloudInputPacket::CloudInputPacket(uint64_t stamp, const std::string& sensor_nam
     : SensorInputPacket(stamp, sensor_name) {}
 
 bool CloudInputPacket::fillInputDataImpl(InputData& msg) const {
-  // Points are mandatory, plus at least one of labels or colors for semantics.
   if (points.empty() || (labels.empty() && colors.empty())) {
     LOG(ERROR) << "Missing required pointcloud.";
     return false;
@@ -119,7 +114,6 @@ bool CloudInputPacket::fillInputDataImpl(InputData& msg) const {
   msg.color_image = colors;
   msg.label_image = labels;
 
-  // Per-point labels and colors, when present, must match the cloud layout.
   if (!msg.label_image.empty() && !sizesMatch(msg.vertex_map, msg.label_image)) {
     LOG(ERROR) << "Label dimensions " << showImageDim(msg.label_image)
                << " do not match pointcloud dimensions "

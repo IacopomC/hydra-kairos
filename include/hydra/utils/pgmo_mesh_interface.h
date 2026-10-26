@@ -38,78 +38,57 @@
 
 #include "hydra/reconstruction/voxel_types.h"
 
-/**
- * @file pgmo_mesh_interface.h
- * @brief Adapters that expose hydra mesh representations through the mesh-deformation
- *        library's MeshInterface. One adapter wraps a block-structured mesh layer, the
- *        other a flat mesh, so both can supply vertices, semantics and block indices to
- *        the deformation routines.
- */
-
 namespace hydra {
 
-/// @brief Adapts a block-structured mesh layer to the deformation MeshInterface.
+/**
+ * @brief Interface for PGMO to access a mesh layer.
+ */
 struct PgmoMeshLayerInterface : public kimera_pgmo::MeshInterface {
-  /// @brief Wrap the given mesh layer.
   PgmoMeshLayerInterface(const MeshLayer& mesh);
 
-  /// @brief Return the indices of all blocks in the mesh.
   const BlockIndices& blockIndices() const override;
 
-  /// @brief Select the block whose vertices subsequent queries operate on.
   void markBlockActive(const BlockIndex& block) const override;
 
-  /// @brief Number of vertices in the currently active block.
   size_t activeBlockSize() const override;
 
-  /// @brief Return a vertex of the active block as a colored point.
   pcl::PointXYZRGBA getActiveVertex(size_t index) const override;
 
-  /// @brief Report whether the mesh carries per-vertex semantic labels.
   bool hasSemantics() const override;
 
-  /// @brief Return the semantic label of an active-block vertex, if any.
   std::optional<uint32_t> getActiveSemantics(size_t index) const override;
 
-  /// @brief Produce an owning copy of this interface.
   kimera_pgmo::MeshInterface::Ptr clone() const override;
 
  private:
-  const MeshLayer& mesh_;                  ///< Wrapped mesh layer.
-  BlockIndices block_indices_;             ///< Cached list of block indices.
-  mutable MeshBlock::ConstPtr active_mesh_;  ///< Block selected by markBlockActive().
+  const MeshLayer& mesh_;
+  BlockIndices block_indices_;
+  mutable MeshBlock::ConstPtr active_mesh_;
 };
 
-/// @brief Adapts a flat scene-graph mesh to the deformation MeshInterface.
-/// The whole mesh is treated as a single active block, so markBlockActive() is a no-op.
+/**
+ * @brief Interface for PGMO to access a spark-dsg mesh.
+ */
 struct PgmoMeshInterface : public kimera_pgmo::MeshInterface {
-  /// @brief Wrap the given mesh.
   PgmoMeshInterface(const Mesh& mesh);
 
-  /// @brief Return the single block index representing the whole mesh.
   const BlockIndices& blockIndices() const override;
 
-  /// @brief No-op: this mesh exposes only one implicit block.
   void markBlockActive(const BlockIndex&) const override {}
 
-  /// @brief Total number of vertices in the mesh.
   size_t activeBlockSize() const override;
 
-  /// @brief Return a vertex as a colored point.
   pcl::PointXYZRGBA getActiveVertex(size_t index) const override;
 
-  /// @brief Report whether the mesh carries per-vertex semantic labels.
   bool hasSemantics() const override;
 
-  /// @brief Return the semantic label of a vertex, if any.
   std::optional<uint32_t> getActiveSemantics(size_t index) const override;
 
-  /// @brief Produce an owning copy of this interface.
   kimera_pgmo::MeshInterface::Ptr clone() const override;
 
  private:
-  const Mesh& mesh_;            ///< Wrapped mesh.
-  BlockIndices block_indices_;  ///< Single block index covering the mesh.
+  const Mesh& mesh_;
+  BlockIndices block_indices_;
 };
 
 }  // namespace hydra

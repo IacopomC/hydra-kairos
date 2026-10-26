@@ -34,15 +34,6 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file mesh_integrator.h
- * @brief Builds the surface mesh from the TSDF. Runs marching cubes over the
- *        dirty blocks in parallel, handling each block's interior and the
- *        shared faces between neighbouring blocks, and writes the result into
- *        the map's mesh layer. Also defines the per-voxel occupancy bookkeeping
- *        that links a surface voxel to its emitted mesh vertex.
- */
-
 #include "hydra/reconstruction/index_getter.h"
 #include "hydra/reconstruction/mesh_integrator_config.h"
 #include "hydra/reconstruction/voxel_types.h"
@@ -51,17 +42,15 @@ namespace hydra {
 
 class VolumetricMap;
 
-/// @brief Per-voxel meshing bookkeeping: whether the voxel lies on the surface,
-/// and where its emitted vertex lives in the mesh. (Formerly VertexVoxel.)
+// NOTE(lschmid): Former VertexVoxel.
 struct OccupancyVoxel {
-  bool on_surface = false;       ///< Whether the voxel contributed a surface vertex.
-  size_t block_vertex_index;     ///< Index of that vertex within its mesh block.
-  BlockIndex mesh_block;         ///< Mesh block holding the vertex.
+  bool on_surface = false;
+  size_t block_vertex_index;
+  BlockIndex mesh_block;
 };
-using OccupancyBlock = spatial_hash::VoxelBlock<OccupancyVoxel>;  ///< Block of occupancy voxels.
-using OccupancyLayer = spatial_hash::VoxelLayer<OccupancyBlock>;  ///< Layer of occupancy blocks.
+using OccupancyBlock = spatial_hash::VoxelBlock<OccupancyVoxel>;
+using OccupancyLayer = spatial_hash::VoxelLayer<OccupancyBlock>;
 
-/// @brief Extracts the surface mesh from a VolumetricMap's TSDF via marching cubes.
 class MeshIntegrator {
  public:
   using BlockIndexGetter = IndexGetter<BlockIndex>;
@@ -70,56 +59,42 @@ class MeshIntegrator {
 
   virtual ~MeshIntegrator() = default;
 
-  /// @brief Mesh the map's TSDF into its mesh layer.
-  /// @param map Map whose TSDF is meshed and whose mesh layer is written.
-  /// @param only_mesh_updated_blocks Mesh only blocks flagged mesh-dirty.
-  /// @param clear_updated_flag Clear each block's mesh-dirty flag after meshing.
-  /// @param occupancy Optional layer to record per-voxel vertex bookkeeping.
   virtual void generateMesh(VolumetricMap& map,
                             bool only_mesh_updated_blocks,
                             bool clear_updated_flag,
                             OccupancyLayer* occupancy = nullptr) const;
 
-  /// @brief Allocate the mesh (and optional occupancy) blocks for @p blocks.
   void allocateBlocks(const BlockIndices& blocks,
                       VolumetricMap& map,
                       OccupancyLayer* occupancy) const;
 
-  /// @brief Log how many blocks are being meshed, at the given verbosity.
   void showUpdateInfo(const VolumetricMap& map,
                       const BlockIndices& blocks,
                       int verbosity) const;
 
-  /// @brief Mesh @p blocks across worker threads (interior or exterior pass).
   void launchThreads(const BlockIndices& blocks,
                      bool interior_pass,
                      VolumetricMap& map,
                      OccupancyLayer* occupancy) const;
 
-  /// @brief Worker loop meshing block interiors pulled from @p index_getter.
   void processInterior(VolumetricMap* map,
                        BlockIndexGetter* index_getter,
                        OccupancyLayer* occupancy) const;
 
-  /// @brief Worker loop meshing the shared faces between neighbouring blocks.
   void processExterior(VolumetricMap* map,
                        BlockIndexGetter* index_getter,
                        OccupancyLayer* occupancy) const;
 
-  /// @brief Mesh one cube wholly inside a block.
   virtual void meshBlockInterior(const BlockIndex& block_index,
                                  const VoxelIndex& voxel_index,
                                  VolumetricMap& map,
                                  OccupancyLayer* occupancy) const;
 
-  /// @brief Mesh one cube that straddles a block boundary, pulling corners from
-  /// the neighbouring blocks.
   virtual void meshBlockExterior(const BlockIndex& block_index,
                                  const VoxelIndex& voxel_index,
                                  VolumetricMap& map,
                                  OccupancyLayer* occupancy) const;
 
-  /// @brief Resolve the neighbouring block/corner for an out-of-range voxel index.
   static BlockIndex getNeighborIndex(const BlockIndex& block_idx,
                                      int voxels_per_side,
                                      VoxelIndex& corner_index);

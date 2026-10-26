@@ -33,15 +33,6 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-
-/**
- * @file input_module.h
- * @brief The pipeline's front door. Runs a thread that drains the per-sensor
- *        data receivers, looks up the body pose at each frame's timestamp, packs
- *        the two into an InputPacket, and pushes it onto the output queue for
- *        the reconstruction stage.
- */
-
 #include <config_utilities/virtual_config.h>
 
 #include <atomic>
@@ -54,31 +45,26 @@
 
 namespace hydra {
 
-/// @brief A queried relative pose: validity plus the target-from-source rotation
-/// and translation, with helpers to test validity and build the transform.
 struct PoseStatus {
   bool is_valid = false;
-  Eigen::Quaterniond target_R_source;
-  Eigen::Vector3d target_p_source;
+  Eigen::Quaterniond target_R_source = Eigen::Quaterniond::Identity();
+  Eigen::Vector3d target_p_source = Eigen::Vector3d::Zero();
   operator bool() const { return is_valid; }
   Eigen::Isometry3d target_T_source() const {
     return Eigen::Translation<double, 3>(target_p_source) * target_R_source;
   }
 };
 
-/// @brief Collects data from the configured sensor receivers, pairs each frame
-/// with the body pose at its timestamp, and emits InputPackets. Subclasses
-/// supply the pose lookup via getBodyPose().
 class InputModule : public Module {
  public:
   using OutputQueue = MessageQueue<InputPacket::Ptr>;
   struct Config {
-    /// @brief One named input: a data receiver paired with its sensor model.
     struct InputPair {
       config::VirtualConfig<DataReceiver> receiver;
       config::VirtualConfig<Sensor> sensor;
     };
-    std::map<std::string, InputPair> inputs;  ///< Configured inputs, keyed by name.
+    std::map<std::string, InputPair> inputs;
+    size_t max_receiver_queue_size = 0;
   } const config;
 
   InputModule(const Config& config, const OutputQueue::Ptr& output_queue);
@@ -89,17 +75,13 @@ class InputModule : public Module {
 
   void stop() override;
 
-  void save(const LogSetup& log_setup) override;
-
   std::string printInfo() const override;
 
  protected:
-  /// @brief Worker loop: drain receivers, attach poses, emit InputPackets.
   void dataSpin();
 
   void stopImpl();
 
-  /// @brief Look up the body pose in the world frame at @p timestamp.
   virtual PoseStatus getBodyPose(uint64_t timestamp) = 0;
 
  protected:

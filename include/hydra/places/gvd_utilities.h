@@ -37,60 +37,39 @@
 #include "hydra/places/gvd_voxel.h"
 #include "hydra/reconstruction/voxel_types.h"
 
-/**
- * @file gvd_utilities.h
- * @brief Free functions used during GVD integration: choosing the lower of two
- *        candidate distances and deciding whether a voxel pair meets the
- *        Voronoi condition based on parent-voxel separation.
- */
-
 namespace hydra::places {
 
-/// @brief Result of comparing a candidate distance against a current one.
 struct DistancePotential {
-  bool is_lower;    ///< Whether the candidate is the lower (closer) distance.
-  double distance;  ///< The selected distance value.
+  bool is_lower;
+  double distance;
 };
 
-/// @brief Per-voxel outcome of a Voronoi membership check on a voxel pair.
 struct VoronoiCondition {
-  bool neighbor_is_voronoi{false};  ///< Whether the neighbor should be marked Voronoi.
-  bool current_is_voronoi{false};   ///< Whether the current voxel should be marked Voronoi.
+  bool neighbor_is_voronoi{false};
+  bool current_is_voronoi{false};
 };
 
-/// @brief Pick the lower of a propagated neighbor distance and the current distance.
-/// @param v_dist Current voxel distance.
-/// @param n_dist Neighbor voxel distance.
-/// @param distance Voxel-to-neighbor separation added during propagation.
-/// @param min_diff_m Minimum improvement required to count as lower.
-/// @return The chosen distance and whether it came from the neighbor.
 DistancePotential getLowerDistance(float v_dist,
                                    float n_dist,
                                    float distance,
                                    float min_diff_m = 0.0f);
 
-/// @brief Test whether a voxel and its neighbor form part of the Voronoi diagram
-/// by checking that their nearest-surface parents are sufficiently separated.
 VoronoiCondition checkVoronoi(const VoronoiCheckConfig& config,
                               const GvdVoxel& current,
                               const GlobalIndex& current_idx,
                               const GvdVoxel& neighbor,
                               const GlobalIndex& neighbor_idx);
 
-/// @brief Parent-uniqueness test based on L1 distance between parent indices.
 bool isParentUniqueL1(const VoronoiCheckConfig& config,
                       const GlobalIndex& /* current_index */,
                       const GlobalIndex& current_parent,
                       const GlobalIndex& neighbor_parent);
 
-/// @brief Parent-uniqueness test based on the angle between parent directions.
 bool isParentUniqueAngle(const VoronoiCheckConfig& config,
                          const GlobalIndex& current_index,
                          const GlobalIndex& current_parent,
                          const GlobalIndex& neighbor_parent);
 
-/// @brief Parent-uniqueness test dispatching on the configured mode (L1, angle,
-/// or L1 followed by angle).
 bool isParentUnique(const VoronoiCheckConfig& config,
                     const GlobalIndex& current_idx,
                     const GlobalIndex& current_parent,

@@ -45,32 +45,24 @@ size_t MergeTracker::applyMerges(const DynamicSceneGraph& unmerged,
   auto& prior_merges = dsg.merges;
   auto& graph = *dsg.graph;
 
-  // Garbage-collect remap state. Without this, prior_merges[k] keeps
-  // redirecting proposals to a node that has itself been merged away
-  // or deleted; remap() then produces a dead target every tick and
-  // mergeNodes fails forever. Drop entries whose key or value is no
-  // longer in the graph, and the matching entries in merge_sets_.
-  size_t pruned_remaps = 0;
-  for (auto it = prior_merges.begin(); it != prior_merges.end();) {
-    if (!graph.hasNode(it->first) || !graph.hasNode(it->second)) {
-      it = prior_merges.erase(it);
-      ++pruned_remaps;
+  // Drop merges whose target has since been removed from the graph: remapping onto
+  // a missing node would make every later merge of its absorbed nodes fail. The key
+  // of an entry is the absorbed node, which is never in the graph, so only the
+  // target is checked.
+  for (auto iter = prior_merges.begin(); iter != prior_merges.end();) {
+    if (graph.hasNode(iter->second)) {
+      ++iter;
     } else {
-      ++it;
+      iter = prior_merges.erase(iter);
     }
   }
-  size_t pruned_sets = 0;
-  for (auto it = merge_sets_.begin(); it != merge_sets_.end();) {
-    if (!graph.hasNode(it->first)) {
-      it = merge_sets_.erase(it);
-      ++pruned_sets;
+
+  for (auto iter = merge_sets_.begin(); iter != merge_sets_.end();) {
+    if (graph.hasNode(iter->first)) {
+      ++iter;
     } else {
-      ++it;
+      iter = merge_sets_.erase(iter);
     }
-  }
-  if (pruned_remaps || pruned_sets) {
-    LOG(INFO) << "MergeTracker: pruned " << pruned_remaps
-              << " stale remaps and " << pruned_sets << " stale merge-sets";
   }
 
   size_t num_applied = 0;
@@ -84,9 +76,7 @@ size_t MergeTracker::applyMerges(const DynamicSceneGraph& unmerged,
       continue;
     }
 
-    // Stale proposal: an endpoint is no longer in the graph (e.g. the
-    // upstream proposer hasn't seen a recent deletion). Drop quietly —
-    // proposals re-arrive every tick and warning here is just noise.
+    // proposals can lag behind node removals; these are expected and not an error
     if (!graph.hasNode(merge.from) || !graph.hasNode(merge.to)) {
       VLOG(5) << "Dropping stale merge: " << merge << " (original: " << orig_merge
               << ", from: " << std::boolalpha << graph.hasNode(merge.from)
@@ -112,16 +102,12 @@ size_t MergeTracker::applyMerges(const DynamicSceneGraph& unmerged,
     return num_applied;
   }
 
-  // Recompute attributes for every target that gained children this pass by
-  // re-fusing the target with its full set of absorbed nodes (read from the
-  // unmerged graph, where each child still exists with its own attributes).
   for (const auto& node : to_update) {
     auto iter = merge_sets_.find(node);
     if (iter == merge_sets_.end()) {
       continue;
     }
 
-    // Drop children that have since disappeared from the unmerged graph.
     auto child_iter = iter->second.begin();
     while (child_iter != iter->second.end()) {
       if (!unmerged.hasNode(*child_iter)) {
@@ -159,9 +145,7 @@ void MergeTracker::updateParents(std::map<NodeId, NodeId>& prior_merges,
     return;  // no previous merges
   }
 
-  // If `from` had absorbed nodes of its own, transitively re-point all of them
-  // at the new target so the remap stays flat (single hop) and `from`'s set is
-  // folded into the target's before being discarded.
+  // rewire old merges
   for (const auto& child : from_iter->second) {
     prior_merges[child] = merge.to;
     to_iter->second.insert(child);

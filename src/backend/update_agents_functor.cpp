@@ -69,20 +69,18 @@ UpdateAgentsFunctor::UpdateAgentsFunctor(const Config&) {}
 void UpdateAgentsFunctor::call(const DynamicSceneGraph&,
                                SharedDsgInfo& dsg,
                                const UpdateInfo::ConstPtr& info) const {
-  if (!info->complete_agent_values || info->complete_agent_values->size() == 0) {
+  if (!info->pgmo_values || info->pgmo_values->size() == 0) {
     return;
   }
 
   ScopedTimer timer("backend/agent_update", info->timestamp_ns, true, 1, false);
   auto& graph = *dsg.graph;
-  const auto desired_layer = DsgLayers::AGENTS;
-  // Write the optimized trajectory back onto every agent node, keyed by the
-  // PGMO/deformation-graph key stored on each node.
-  for (const auto& [prefix, layer] : graph.dynamicLayersOfType(desired_layer)) {
+  const auto desired_layer = graph.getLayerKey(DsgLayers::AGENTS)->layer;
+  for (const auto& [prefix, layer] : graph.layer_partition(desired_layer)) {
     std::set<NodeId> missing_nodes;
-    for (const auto& node : layer->nodes()) {
+    for (const auto& [node_id, node] : layer->nodes()) {
       auto& attrs = node->attributes<AgentNodeAttributes>();
-      if (!info->complete_agent_values->exists(attrs.external_key)) {
+      if (!info->pgmo_values->exists(attrs.external_key)) {
         missing_nodes.insert(node->id);
         continue;
       }
@@ -90,15 +88,15 @@ void UpdateAgentsFunctor::call(const DynamicSceneGraph&,
       const auto p_prev = attrs.position;
       const auto q_prev = attrs.world_R_body;
       const gtsam::Pose3 prev_pose(gtsam::Rot3(q_prev), p_prev);
-      auto pose = info->complete_agent_values->at<gtsam::Pose3>(attrs.external_key);
+      auto pose = info->pgmo_values->at<gtsam::Pose3>(attrs.external_key);
       attrs.position = pose.translation();
       attrs.world_R_body = Eigen::Quaterniond(pose.rotation().matrix());
 
       const auto diff = prev_pose.between(pose);
       const auto q_diff = Eigen::Quaterniond(diff.rotation().matrix());
       const auto p_diff = diff.translation();
-      VLOG(10) << "Updating agent " << NodeSymbol(node->id).getLabel() << " pose from "
-               << NodeSymbol(attrs.external_key).getLabel() << ":"
+      VLOG(10) << "Updating agent " << NodeSymbol(node->id).str() << " pose from "
+               << NodeSymbol(attrs.external_key).str() << ":"
                << "\n - original: " << toString(q_prev, p_prev)
                << "\n - new:      " << toString(attrs.world_R_body, attrs.position)
                << "\n - diff:     " << toString(q_diff, p_diff);

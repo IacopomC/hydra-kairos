@@ -52,27 +52,12 @@
 
 #include "hydra/reconstruction/voxel_types.h"
 
-/**
- * @file bucket_queue.h
- * @brief Bucketed priority queue templated on the stored key type. Values in [0, max_val]
- *        are mapped into a fixed number of buckets, giving approximate priority ordering
- *        with constant-time insertion. A cached index of the lowest non-empty bucket
- *        speeds up front and pop operations.
- */
-
 namespace hydra {
-
-/// @brief Approximate priority queue that sorts keys into a fixed set of value buckets.
-/// Lower values are served first. Resolution is limited by the bucket count.
-/// @tparam T Type of the keys stored in the queue.
+// TODO(@Nathan): Check whether this is needed.
 template <typename T>
 class BucketQueue {
  public:
-  /// @brief Construct an empty queue with no buckets allocated.
   BucketQueue() : last_bucket_index_(0) {}
-  /// @brief Construct a queue with a fixed number of buckets over [0, max_val].
-  /// @param num_buckets Number of buckets to spread values across.
-  /// @param max_val Upper bound on values; larger values are clamped to this.
   explicit BucketQueue(int num_buckets, double max_val)
       : num_buckets_(num_buckets),
         max_val_(max_val),
@@ -81,9 +66,7 @@ class BucketQueue {
     buckets_.resize(num_buckets_);
   }
 
-  /// @brief Reconfigure the bucket count and value range. Clears all queued elements.
-  /// @param num_buckets New number of buckets.
-  /// @param max_val New upper bound on values.
+  /// WARNING: will CLEAR THE QUEUE!
   void setNumBuckets(int num_buckets, double max_val) {
     max_val_ = max_val;
     num_buckets_ = num_buckets;
@@ -92,9 +75,6 @@ class BucketQueue {
     num_elements_ = 0;
   }
 
-  /// @brief Insert a key with the given priority value.
-  /// @param key Key to store.
-  /// @param value Priority value; clamped to [0, max_val] and mapped to a bucket.
   void push(const T& key, double value) {
     CHECK_NE(num_buckets_, 0);
     if (value > max_val_) {
@@ -111,7 +91,6 @@ class BucketQueue {
     num_elements_++;
   }
 
-  /// @brief Remove the lowest-value element. Does nothing if the queue is empty.
   void pop() {
     if (empty()) {
       return;
@@ -125,8 +104,6 @@ class BucketQueue {
     }
   }
 
-  /// @brief Return the lowest-value element without removing it.
-  /// @return The front key. Must not be called on an empty queue.
   T front() {
     CHECK_NE(num_buckets_, 0);
     CHECK(!empty());
@@ -136,10 +113,8 @@ class BucketQueue {
     return buckets_[last_bucket_index_].front();
   }
 
-  /// @brief Report whether the queue holds no elements.
   bool empty() { return num_elements_ == 0; }
 
-  /// @brief Remove all elements while keeping the current bucket configuration.
   void clear() {
     buckets_.clear();
     buckets_.resize(num_buckets_);
@@ -148,13 +123,14 @@ class BucketQueue {
   }
 
  private:
-  int num_buckets_;                       ///< Number of value buckets.
-  double max_val_;                        ///< Upper bound on accepted values.
-  std::vector<std::queue<T>> buckets_;    ///< One FIFO queue per bucket.
+  int num_buckets_;
+  double max_val_;
+  std::vector<std::queue<T>> buckets_;
 
-  int last_bucket_index_;  ///< Cached index of the lowest non-empty bucket for fast lookup.
-  size_t num_elements_;    ///< Total queued elements, kept for constant-time empty checks.
+  /// Speeds up retrivals.
+  int last_bucket_index_;
+  /// This is also to speed up empty checks.
+  size_t num_elements_;
 };
 
 }  // namespace hydra
-

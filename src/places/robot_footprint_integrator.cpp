@@ -54,20 +54,16 @@ RobotFootprintIntegrator::RobotFootprintIntegrator(const Config& config)
 
 RobotFootprintIntegrator::~RobotFootprintIntegrator() = default;
 
-// Enumerate the map blocks overlapping the body-frame bounding box at the given pose.
+// somewhat adapted from findBlocksInViewFrustum
 BlockIndices getAffectedBlocks(const Eigen::Isometry3f& world_T_body,
                                const BoundingBox& bbox,
                                VolumetricMap& map) {
-  // inflate the box by half a block diagonal so a block is never missed just because its
-  // center sits outside the box while a corner pokes in
   const auto b_size = map.blockSize();
   const auto block_diag_half = std::sqrt(3.0f) * b_size / 2.0f;
   const auto margin = Eigen::Vector3f::Constant(block_diag_half);
   BoundingBox inflated = bbox;
   inflated.dimensions += 2.0f * margin;
 
-  // scan a cube of candidate block offsets around the body large enough to cover the
-  // inflated box in any orientation
   const double max_range = inflated.dimensions.maxCoeff();
   const int max_steps = std::ceil(max_range / b_size) + 1;
   const auto body_T_world = world_T_body.inverse();
@@ -78,7 +74,6 @@ BlockIndices getAffectedBlocks(const Eigen::Isometry3f& world_T_body,
   for (int x = -max_steps; x <= max_steps; ++x) {
     for (int y = -max_steps; y <= max_steps; ++y) {
       for (int z = -max_steps; z <= max_steps; ++z) {
-        // transform each candidate block center into the body frame to test containment
         const Eigen::Vector3f offset(x, y, z);
         const auto p_body = body_T_world * (pos + offset * b_size);
         if (!inflated.contains(p_body)) {
@@ -100,9 +95,6 @@ void RobotFootprintIntegrator::markFreespace(const Eigen::Isometry3f& w_T_b,
   auto& tsdf = map.getTsdfLayer();
   const auto semantic_layer = map.getSemanticLayer();
 
-  // stamp every voxel inside the footprint as free space (max positive distance) so the
-  // robot's own body is never reconstructed as an obstacle; track freshly allocated
-  // blocks so we can roll them back if they end up entirely outside the footprint
   BlockIndices new_blocks;
   for (const auto& idx : block_indices) {
     TsdfBlock::Ptr block;
@@ -132,8 +124,6 @@ void RobotFootprintIntegrator::markFreespace(const Eigen::Isometry3f& w_T_b,
     }
   }
 
-  // drop any block we just allocated that received no updates and isn't needed elsewhere,
-  // so the footprint pass doesn't leave empty blocks behind
   for (const auto& idx : new_blocks) {
     const auto block = map.getTsdfLayer().getBlockPtr(idx);
     if (!block || block->esdf_updated || block->mesh_updated) {

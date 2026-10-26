@@ -39,47 +39,30 @@
 #include <optional>
 #include <string>
 
-/**
- * @file label_remapper.h
- * @brief Remaps fine-grained ("sub") semantic labels onto coarser ("super")
- *        labels. The mapping is loaded from a list of sub/super id pairs and
- *        applied per label lookup.
- */
-
 namespace hydra {
 
-/// @brief One entry of a label remapping: a source id and its target id.
 struct LabelRemapRow {
-  uint32_t sub_id;    ///< Source (fine-grained) label id.
-  uint32_t super_id;  ///< Target (coarser) label id.
+  uint32_t sub_id;
+  uint32_t super_id;
 };
 
-/// @brief Register the label remap row fields with the config system.
 void declare_config(LabelRemapRow& config);
 
-/// @brief Maps semantic labels onto coarser labels using a loaded table.
 class LabelRemapper {
  public:
-  /// @brief Construct an empty remapper that performs no remapping.
+  // Construction
   LabelRemapper();
-  /// @brief Construct a remapper from a file of sub/super id pairs.
-  /// @param remapping_file Path to the remapping definition file.
   explicit LabelRemapper(const std::string& remapping_file);
   virtual ~LabelRemapper() = default;
 
-  /// @brief Look up the target label for a source label.
-  /// @param from Source label id.
-  /// @return The remapped label, or empty if no entry exists for the source.
   std::optional<uint32_t> remapLabel(const uint32_t from) const;
 
-  /// @brief Whether the remapping table is empty.
   inline bool empty() const { return label_remapping_.empty(); }
 
-  /// @brief Boolean conversion that is true when the remapping table is empty.
   inline operator bool() const { return empty(); }
 
  private:
-  std::map<uint32_t, uint32_t> label_remapping_;  ///< Source-to-target label table.
+  std::map<uint32_t, uint32_t> label_remapping_;
 };
 
 }  // namespace hydra

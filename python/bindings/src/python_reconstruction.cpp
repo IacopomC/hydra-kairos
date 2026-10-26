@@ -42,6 +42,7 @@
 #include <hydra/active_window/reconstruction_module.h>
 #include <hydra/common/global_info.h>
 #include <kimera_pgmo/compression/delta_compression.h>
+#include <kimera_pgmo/mesh_offset_info.h>
 #include <kimera_pgmo/utils/mesh_io.h>
 #include <pybind11/eigen.h>
 #include <pybind11/stl.h>
@@ -53,18 +54,21 @@
 #include "hydra/bindings/glog_utilities.h"
 #include "hydra/bindings/python_image.h"
 #include "hydra/bindings/python_sensor_input.h"
+#include "hydra/utils/data_directory.h"
 #include "hydra/utils/mesh_utilities.h"
 #include "hydra/utils/pgmo_mesh_interface.h"
 #include "hydra/utils/pgmo_mesh_traits.h"
 
 namespace hydra::python {
 
+using namespace spark_dsg;
+
 struct MeshUpdater {
   MeshUpdater(double voxel_size, const std::string& url)
       : compression(voxel_size / 4.0),
         queue(new ReconstructionModule::OutputQueue()),
         zmq_sender(url, 2) {
-    graph.reset(new DynamicSceneGraph(DynamicSceneGraph::LayerIds{2, 3, 4, 5}));
+    graph.reset(new DynamicSceneGraph());
     graph->setMesh(std::make_shared<Mesh>());
   }
 
@@ -86,15 +90,16 @@ struct MeshUpdater {
     }
 
     const auto& mesh = msg->map().getMeshLayer();
-    auto interface = PgmoMeshLayerInterface(mesh);
-    const auto delta = compression.update(interface, msg->timestamp_ns);
-    delta->updateMesh(*graph->mesh());
+    const BlockMeshIter wrapper(mesh);
+    const auto delta = compression.update(wrapper, msg->timestamp_ns);
+    delta->updateMesh(*graph->mesh(), mesh_offsets);
     zmq_sender.send(*graph, true);
   }
 
  public:
   std::atomic<bool> should_shutdown = false;
   kimera_pgmo::DeltaCompression compression;
+  kimera_pgmo::MeshOffsetInfo mesh_offsets;
   std::shared_ptr<spark_dsg::DynamicSceneGraph> graph;
   std::vector<uint64_t> mesh_timestamps;
   ReconstructionModule::OutputQueue::Ptr queue;
@@ -146,10 +151,6 @@ PythonReconstruction::PythonReconstruction(const Config& config,
   }
 
   GlogSingleton::instance().setLogLevel(0, 0, false);
-  config::Settings().setLogger("glog");
-  config::Settings().print_width = 100;
-  config::Settings().print_indent = 45;
-
   GlobalInfo::instance().setSensor(sensor);
 
   ReconstructionModule::OutputQueue::Ptr queue;
@@ -188,9 +189,9 @@ void PythonReconstruction::save(const std::filesystem::path& output) {
     return;
   }
 
-  LogSetup logs(output);
+  DataDirectory logs(output);
   if (logs.valid()) {
-    module_->map().save(logs.getLogDir() + "/map");
+    module_->map().save(logs.path("map"));
   }
 
   stop();
@@ -204,7 +205,7 @@ void PythonReconstruction::save(const std::filesystem::path& output) {
     return;
   }
 
-  kimera_pgmo::WriteMesh(logs.getLogDir() + "/mesh.ply", *mesh);
+  kimera_pgmo::WriteMesh(logs.path() / "mesh.ply", *mesh);
 }
 
 namespace python_reconstruction {

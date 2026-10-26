@@ -74,10 +74,6 @@ ObjectGnnDescriptor::ObjectGnnDescriptor(const std::string& model_path,
 
 gnn::TensorMap ObjectGnnDescriptor::makeInput(const DynamicSceneGraph& graph,
                                               const std::set<NodeId>& nodes) const {
-  // Feature layout per node depends on use_pos_in_feature_: when true, position
-  // is part of the feature row x (3) + bbox center (3) + label embedding;
-  // otherwise position is passed in a separate `pos` tensor and x is just
-  // bbox center (3) + label embedding.
   const size_t feature_size = label_embedding_size_ + (use_pos_in_feature_ ? 6 : 3);
   gnn::Tensor x(nodes.size(), feature_size, gnn::Tensor::Type::FLOAT32);
   auto x_map = x.map<float>();
@@ -88,8 +84,6 @@ gnn::TensorMap ObjectGnnDescriptor::makeInput(const DynamicSceneGraph& graph,
   }
   auto pos_map = pos.map<float>();
 
-  // Fill the per-node feature rows and record each node's row index so edges
-  // can be expressed as index pairs below.
   size_t index = 0;
   std::map<NodeId, size_t> index_mapping;
   for (const auto node : nodes) {
@@ -105,8 +99,6 @@ gnn::TensorMap ObjectGnnDescriptor::makeInput(const DynamicSceneGraph& graph,
 
     x_map.block(index, start_idx, 1, 3) = attrs.bounding_box.world_P_center.transpose();
 
-    // Look up the embedding for this object's semantic label; zero-fill if the
-    // label has no embedding so the row stays well-formed.
     auto iter = label_embeddings_.find(attrs.semantic_label);
     if (iter != label_embeddings_.end()) {
       x_map.block(index, start_idx + 3, 1, label_embedding_size_) =
@@ -119,10 +111,6 @@ gnn::TensorMap ObjectGnnDescriptor::makeInput(const DynamicSceneGraph& graph,
     ++index;
   }
 
-  // Build edges by spatial proximity: connect every pair of objects closer
-  // than max_edge_distance_m_. Both (source, target) and (target, source) are
-  // emitted as the loops run over all ordered pairs, yielding an undirected
-  // adjacency (see the note below).
   std::list<std::pair<int64_t, int64_t>> edges;
   for (const auto& source : nodes) {
     const auto source_position = graph.getPosition(source);
@@ -171,15 +159,11 @@ Descriptor::Ptr ObjectGnnDescriptor::construct(const Dsg& graph,
   descriptor->root_position = graph.getPosition(*parent);
   descriptor->timestamp = agent_node.timestamp;
 
-  // No nearby objects: flag the descriptor null (still cacheable) so matching
-  // treats it as a default rather than running the model on an empty graph.
   if (descriptor->nodes.empty()) {
     descriptor->is_null = true;
     return descriptor;
   }
 
-  // Run the GNN forward pass on the subgraph and take its output embedding as
-  // the descriptor values.
   auto input = makeInput(graph, descriptor->nodes);
   VLOG(20) << "Inputs:";
   VLOG(20) << "  - x: " << std::endl << input.at("x").map<float>();
@@ -231,9 +215,6 @@ gnn::TensorMap PlaceGnnDescriptor::makeInput(const DynamicSceneGraph& graph,
     ++index;
   }
 
-  // Edges come from the existing place-graph connectivity: each place is
-  // linked to its siblings, restricted to siblings that are also in the
-  // extracted subgraph.
   std::list<std::pair<int64_t, int64_t>> edges;
   for (const auto source : nodes) {
     const SceneGraphNode& node = *graph.getNode(source);

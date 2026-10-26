@@ -62,18 +62,14 @@ BlockIndices VolumetricWindow::archiveBlocks(uint64_t timestamp_ns,
                                              const Eigen::Isometry3d& world_T_body,
                                              VolumetricMap& map,
                                              bool skip_updated) const {
-  // Collect every TSDF block that should leave the active window, then remove
-  // them in one pass. The returned indices identify the archived geometry.
   BlockIndices to_remove;
   const auto& tsdf = map.getTsdfLayer();
   for (const auto& block : tsdf) {
-    // TODO: the implicit constructor zeros the block update timestamp
-    // Keep blocks still inside the window (e.g. near the current pose).
+    // TODO(nathan|lukas) the implicit constructor zeros the block update timestamp
     if (inBounds(timestamp_ns, world_T_body, block)) {
       continue;
     }
 
-    // Optionally retain blocks modified this cycle; they are not yet finalized.
     if (skip_updated && block.updated) {
       continue;
     }
@@ -83,6 +79,13 @@ BlockIndices VolumetricWindow::archiveBlocks(uint64_t timestamp_ns,
 
   map.removeBlocks(to_remove);
   return to_remove;
+}
+
+bool VolumetricWindow::inBounds(uint64_t stamp,
+                                const Eigen::Isometry3d& world_T_body,
+                                const VolumetricBlockInfo& block) const {
+  const Eigen::Vector3d block_pos = block.blockCenter().cast<double>();
+  return inBounds(stamp, world_T_body, block.update_stamp_ns, block_pos);
 }
 
 void declare_config(SpatialWindowChecker::Config& config) {
@@ -104,9 +107,9 @@ SpatialWindowChecker::SpatialWindowChecker(const Config& config)
 
 bool SpatialWindowChecker::inBounds(uint64_t /* timestamp_ns */,
                                     const Eigen::Isometry3d& world_T_body,
-                                    const VolumetricBlockInfo& block) const {
-  const Eigen::Vector3f pos = world_T_body.translation().cast<float>();
-  return (pos - block.blockCenter()).norm() <= config.max_radius_m;
+                                    const uint64_t /* last_update_ns */,
+                                    const Eigen::Vector3d& last_pos) const {
+  return (world_T_body.translation() - last_pos).norm() <= config.max_radius_m;
 }
 
 }  // namespace hydra

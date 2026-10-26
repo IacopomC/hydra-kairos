@@ -39,7 +39,7 @@ namespace hydra {
 IdTracker::IdTracker(size_t start) : idx_(start) {}
 
 size_t IdTracker::next() const {
-  // Prefer recycling a freed id; otherwise hand out the next fresh counter value.
+  // default to assuming unused is empty
   size_t new_id = idx_;
   if (unused_.empty()) {
     ++idx_;
@@ -52,8 +52,7 @@ size_t IdTracker::next() const {
 }
 
 void IdTracker::markFree(size_t idx) const {
-  // Only ids that were actually handed out (below the counter) can be recycled,
-  // which guards against freeing ids that were never allocated.
+  // validate that ID could have come from existing object
   if (idx < idx_) {
     unused_.push_back(idx);
   }

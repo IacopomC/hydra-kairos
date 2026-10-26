@@ -35,42 +35,20 @@
 #pragma once
 #include "hydra/backend/update_functions.h"
 
-/**
- * @file merge_tracker.h
- * @brief Applies proposed merges to the shared graph and remembers the history
- *        of which nodes were folded together. The remap history lets later
- *        proposals that still reference an absorbed node be redirected to its
- *        surviving target, and the per-target child sets let merged attributes
- *        be recomputed from all original members.
- */
-
 namespace hydra {
 
-/// @brief Applies merge proposals and tracks the accumulated merge history.
 struct MergeTracker {
-  /// @brief Applies the given merges to the graph and refreshes merged attributes.
-  /// Endpoints are first remapped through the prior-merge history; stale and
-  /// already-applied proposals are skipped. The history and per-target child
-  /// sets are pruned of nodes that no longer exist in the graph.
-  /// @param unmerged Graph holding the original, unmerged nodes used to recompute attributes.
-  /// @param proposals Merges to apply this iteration.
-  /// @param dsg Shared graph that receives the merges and stores the remap history.
-  /// @param merge_attrs Optional callback recomputing attributes from the original members.
-  /// @return Number of merges actually applied.
   size_t applyMerges(const DynamicSceneGraph& unmerged,
                      const MergeList& proposals,
                      SharedDsgInfo& dsg,
                      const MergeFunc& merge_attrs = MergeFunc());
 
-  /// @brief Clears the accumulated merge history.
   void clear();
 
  private:
-  /// @brief Redirects existing history entries that targeted the absorbed node
-  /// to the surviving node after a new merge is applied.
   void updateParents(std::map<NodeId, NodeId>& prior_merges, const Merge& merge);
 
-  std::map<NodeId, std::set<NodeId>> merge_sets_;  ///< Original member nodes folded into each surviving node.
+  std::map<NodeId, std::set<NodeId>> merge_sets_;
 };
 
 }  // namespace hydra

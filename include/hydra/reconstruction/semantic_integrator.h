@@ -34,66 +34,109 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file semantic_integrator.h
- * @brief Per-voxel semantic label fusion. Defines the SemanticIntegrator
- *        interface (which labels may be integrated and how a voxel's label
- *        likelihoods are updated) and a maximum-likelihood-estimate
- *        implementation.
- */
-
-#include <set>
 #include <cstdint>
+#include <set>
 
 #include "hydra/reconstruction/voxel_types.h"
 
 namespace hydra {
 
-/// @brief Interface for deciding which semantic labels enter the map and how a
-/// voxel's label distribution is updated from an observed label.
 struct SemanticIntegrator {
   virtual ~SemanticIntegrator() = default;
 
-  /// @brief Whether a point with this label should be integrated at all.
-  /// Discards points that should not be in the map, e.g. dynamic points or
-  /// labels like 'sky'.
-  virtual bool canIntegrate(uint32_t label) const = 0;
-
-  /// @brief Whether this is a label whose semantics can be tracked. Distinct
-  /// from canIntegrate: a label may be trackable even if the point itself is
-  /// not integrated into the TSDF.
-  virtual bool isValidLabel(uint32_t label) const = 0;
-
-  /// @brief Fold an observed @p label into the voxel's label likelihoods.
-  virtual void updateLikelihoods(uint32_t label, SemanticVoxel& voxel) const = 0;
+  /**
+   * @brief Update voxel likelihoods given an observation of a label
+   * @param label Observed input label
+   * @param weight Reconstruction weight assigned to the measurement for the voxel
+   * @param voxel Semantic voxel to update
+   */
+  virtual void updateLikelihoods(uint32_t label,
+                                 float weight,
+                                 SemanticVoxel& voxel) const = 0;
 };
 
-/// @brief Maximum-likelihood semantic integrator, based in part on
-/// Kimera-Semantics: maintains per-voxel label log-likelihoods under a
-/// confusion model and reports the MLE label.
+/*
+ * @brief Full maximum-likelihood integrator
+ *
+ * Based roughly on Kimera-Semantics and https://arxiv.org/pdf/1609.05130
+ */
 class MLESemanticIntegrator : public SemanticIntegrator {
  public:
   struct Config {
-    double label_confidence = 0.9;  ///< Probability the observed label is correct.
+    //! @brief Measurement probability
+    double label_confidence = 0.9;
   } const config;
 
   explicit MLESemanticIntegrator(const Config& config);
 
-  bool canIntegrate(uint32_t label) const override;
-
-  bool isValidLabel(uint32_t label) const override;
-
-  void updateLikelihoods(uint32_t label, SemanticVoxel& voxel) const override;
+  void updateLikelihoods(uint32_t label,
+                         float weight,
+                         SemanticVoxel& voxel) const override;
 
  protected:
   size_t total_labels_;
-  std::set<uint32_t> dynamic_labels_;
-  std::set<uint32_t> invalid_labels_;
 
   float init_likelihood_;
   Eigen::MatrixXf observation_likelihoods_;
 };
 
 void declare_config(MLESemanticIntegrator::Config& config);
+
+class BinarySemanticIntegrator : public hydra::SemanticIntegrator {
+ public:
+  struct Config {};
+
+  explicit BinarySemanticIntegrator(const Config& /* config */){};
+
+  void updateLikelihoods(uint32_t label,
+                         float weight,
+                         SemanticVoxel& voxel) const override;
+};
+
+void declare_config(BinarySemanticIntegrator::Config& config);
+
+/**
+ * @brief Integrator that tracks up to K labels
+ *
+ * Rough implementation of a truncated likelihood integrator.
+ */
+class FirstKSemanticIntegrator : public SemanticIntegrator {
+ public:
+  struct Config {
+    //! Maximum number of classes to track
+    size_t k = 5;
+    //! Minimum weight for a class to be valid
+    float min_weight = 0.0f;
+    //! Maximum weight for any class
+    float max_weight = 0.0f;
+  } const config;
+
+  explicit FirstKSemanticIntegrator(const Config& config);
+
+  void updateLikelihoods(uint32_t label,
+                         float weight,
+                         SemanticVoxel& voxel) const override;
+};
+
+void declare_config(FirstKSemanticIntegrator::Config& config);
+
+/**
+ * @brief Integrator that tracks the single most-likely estimate
+ *
+ * based on: https://ieeexplore.ieee.org/abstract/document/8967890
+ */
+class SingleLabelIntegrator : public SemanticIntegrator {
+ public:
+  struct Config {
+  } const config;
+
+  explicit SingleLabelIntegrator(const Config& config = {});
+
+  void updateLikelihoods(uint32_t label,
+                         float weight,
+                         SemanticVoxel& voxel) const override;
+};
+
+void declare_config(SingleLabelIntegrator::Config& config);
 
 }  // namespace hydra

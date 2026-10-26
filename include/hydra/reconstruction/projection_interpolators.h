@@ -47,14 +47,6 @@
 // purposes notwithstanding any copyright notation herein.
 #pragma once
 
-/**
- * @file projection_interpolators.h
- * @brief Strategies for sampling sensor images at a projected sub-pixel point.
- *        Defines the ProjectionInterpolator interface and its nearest-neighbour,
- *        bilinear, and adaptive implementations, used when projecting a voxel
- *        into the range/color/label images during integration.
- */
-
 #include <spark_dsg/color.h>
 
 #include <memory>
@@ -63,9 +55,6 @@
 
 namespace hydra {
 
-/// @brief Cached interpolation state for one projected pixel: validity, the
-/// integer pixel coordinates, the four neighbour weights, and whether bilinear
-/// blending (rather than nearest) is in use.
 struct InterpolationWeights {
   bool valid = false;
   int u;
@@ -77,53 +66,67 @@ struct InterpolationWeights {
   InterpolationWeights(int _u, int _v) : u(_u), v(_v) {}
 };
 
-/// @brief Interface for sampling image values at a projected point. Call
-/// computeWeights() first, then the interpolate* methods to read each image.
+/**
+ * @brief Interface for different ways to interpolate the values in images.
+ * Use computeWeights() first, then use the other functions interpolate relevant data.
+ */
 class ProjectionInterpolator {
  public:
   virtual ~ProjectionInterpolator() = default;
 
-  /// @brief Compute the neighbour weights for a query point. Assumes (u, v) lie
-  /// within the range image bounds, which is not re-checked here.
-  /// @param u Horizontal image-space position of the point to interpolate.
-  /// @param v Vertical image-space position of the point to interpolate.
-  /// @param range_image Range image (32FC1) used to compute the weights.
-  /// @return The weights used to interpolate quantities from the other images.
+  /**
+   * @brief Computes the weight of neighboring pixels for a query point. This method
+   * assumes that u and v are fully within the bounds of the range image, which is not
+   * re-checked.
+   * @param u Horizontal position in image space of the point to interpolate.
+   * @param v Vertical position in image space of the point to interpolate.
+   * @param range_image Range image as 32FC1 to compute weights.
+   * @return The weights used to interpolate further quantities in other images.
+   */
   virtual InterpolationWeights computeWeights(float u,
                                               float v,
                                               const cv::Mat& range_image) const = 0;
 
-  /// @brief Interpolate the range/depth value using the given weights.
-  /// @param range_image Range image (32FC1) to sample.
-  /// @return The interpolated range value.
-  virtual float InterpolateRange(const cv::Mat& range_image,
+  /**
+   * @brief Compute the depth based on the provided weights.
+   * @param range_image Range image as 32FC1 to interpolate in.
+   * @return float The interpolated range value.
+   */
+  virtual float interpolateRange(const cv::Mat& range_image,
                                  const InterpolationWeights& weights) const = 0;
 
-  /// @brief Interpolate the color using the given weights.
-  /// @param color_img Color image (RGB8) to sample.
-  /// @param w Interpolation weights.
-  /// @return The interpolated color.
+  /**
+   * @brief Compute the color based on the provided weights.
+   * @param color_image Color image as RGB8 to interpolate in.
+   * @param w Interpolation weights (abbreviated to w for formatting)
+   * @return Color The interpolated color value.
+   */
   virtual spark_dsg::Color interpolateColor(const cv::Mat& color_img,
                                             const InterpolationWeights& w) const = 0;
 
-  /// @brief Interpolate the semantic id using the given weights.
-  /// @param id_image ID image (8UC1) to sample.
-  /// @return The interpolated ID.
+  /**
+   * @brief Compute the semantic id based on the provided weights.
+   * @param id_image ID image as 8UC1 to interpolate in.
+   * @return int The interpolated ID value.
+   */
   virtual int interpolateID(const cv::Mat& id_image,
                             const InterpolationWeights& weights) const = 0;
 };
 
-/// @brief Interpolator that selects the nearest neighbouring pixel.
+/**
+ * @brief Interpolates values by selecting the nearest neighbor. Use
+ computeWeights() first, then use the other functions to interpolate the relevant data.
+ */
 class InterpolatorNearest : public ProjectionInterpolator {
  public:
   struct Config {};
-  explicit InterpolatorNearest(const Config&) {}
+  explicit InterpolatorNearest(const Config& = Config{}) {}
 
   InterpolationWeights computeWeights(float u,
                                       float v,
                                       const cv::Mat& range_image) const override;
 
-  float InterpolateRange(const cv::Mat& range_image,
+  float interpolateRange(const cv::Mat& range_image,
                          const InterpolationWeights& weights) const override;
 
   spark_dsg::Color interpolateColor(const cv::Mat& color_image,
@@ -135,17 +138,20 @@ class InterpolatorNearest : public ProjectionInterpolator {
 
 void declare_config(InterpolatorNearest::Config& config);
 
-/// @brief Interpolator that blends the four neighbouring pixels bilinearly.
+/**
+ * @brief Interpolates values using bilinear interpolation. Use computeWeights()
+ first, then use the other functions to interpolate relevant data.
+ */
 class InterpolatorBilinear : public ProjectionInterpolator {
  public:
   struct Config {};
-  explicit InterpolatorBilinear(const Config&) {}
+  explicit InterpolatorBilinear(const Config& = Config{}) {}
 
   InterpolationWeights computeWeights(float u,
                                       float v,
                                       const cv::Mat& range_image) const override;
 
-  float InterpolateRange(const cv::Mat& range_image,
+  float interpolateRange(const cv::Mat& range_image,
                          const InterpolationWeights& weights) const override;
 
   spark_dsg::Color interpolateColor(const cv::Mat& color_image,
@@ -157,13 +163,16 @@ class InterpolatorBilinear : public ProjectionInterpolator {
 
 void declare_config(InterpolatorBilinear::Config& config);
 
-/// @brief Interpolator that uses bilinear blending when the neighbouring range
-/// values are close, but falls back to nearest-neighbour at depth
-/// discontinuities so surface edges are not smeared across the gap.
+/**
+ * @brief Use bilinear interpolation if the range values are all close,
+ * otherwise use nearest neighbor lookup. This behavior should capture surface
+ * discontinuities which would otherwise be interpolated. Use computeWeights()
+ first, then use the other functions to interpolate the relevant data.
+ */
 class InterpolatorAdaptive : public InterpolatorBilinear {
  public:
   struct Config {
-    float max_depth_difference_m = 0.2;  ///< Range gap above which it falls back to nearest.
+    float max_depth_difference_m = 0.2;
   } const config;
 
   explicit InterpolatorAdaptive(const Config& config);
@@ -172,7 +181,7 @@ class InterpolatorAdaptive : public InterpolatorBilinear {
                                       float v,
                                       const cv::Mat& range_image) const override;
 
-  float InterpolateRange(const cv::Mat& range_image,
+  float interpolateRange(const cv::Mat& range_image,
                          const InterpolationWeights& weights) const override;
 
   spark_dsg::Color interpolateColor(const cv::Mat& color_image,

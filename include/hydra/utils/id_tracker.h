@@ -33,36 +33,22 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-#include <list>
 #include <cstddef>
-
-/**
- * @file id_tracker.h
- * @brief Allocator of unique integer ids that recycles freed ids before issuing new
- *        ones, so the id space stays compact when ids are released.
- */
+#include <list>
 
 namespace hydra {
 
-/// @brief Hands out unique ids, reusing previously freed ids when available.
 class IdTracker {
  public:
-  /// @brief Construct the tracker.
-  /// @param start First id to issue when no freed ids are available.
   explicit IdTracker(size_t start = 0);
 
-  /// @brief Obtain an id, preferring a recycled freed id over a new one.
-  /// @return The allocated id.
   size_t next() const;
 
-  /// @brief Return an id to the free pool for later reuse.
-  /// Ids at or above the next fresh id are ignored, since they were never issued.
-  /// @param idx Id to release.
   void markFree(size_t idx) const;
 
  private:
-  mutable size_t idx_;              ///< Next fresh id to issue when the free pool is empty.
-  mutable std::list<size_t> unused_;  ///< Freed ids available for reuse.
+  mutable size_t idx_;
+  mutable std::list<size_t> unused_;
 };
 
 }  // namespace hydra

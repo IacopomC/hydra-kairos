@@ -34,19 +34,9 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file voxel_types.h
- * @brief Core voxel, block, and layer types for the volumetric map. Defines the
- *        TSDF, semantic, and free-space-tracking voxels, the spatial-hash blocks
- *        that store them, the mesh block, and the layer aliases, and re-exports
- *        the spatial-hash geometry and index types used throughout the
- *        reconstruction code.
- */
-
 #include <spark_dsg/mesh.h>
 #include <spatial_hash/voxel_layer.h>
 
-#include <cstddef>
 #include <cstdint>
 
 #include "hydra/common/common_types.h"
@@ -85,40 +75,36 @@ template <typename ValueT>
 using GlobalIndexMap = spatial_hash::IndexHashMap<ValueT>;
 
 // Voxel types.
-
-/// @brief One TSDF voxel: the truncated signed distance to the nearest surface,
-/// the accumulated integration weight, and an averaged surface color.
 struct TsdfVoxel {
-  float distance = 0.0f;   ///< Signed distance to the surface (metres).
-  float weight = 0.0f;     ///< Accumulated integration weight.
-  spark_dsg::Color color;  ///< Averaged surface color.
+  float distance = 0.0f;
+  float weight = 0.0f;
+  spark_dsg::Color color;
 };
 
-/// @brief One semantic voxel, based on the semantic voxel from Kimera-Semantics:
-/// the current maximum-likelihood label and the log-likelihood scores backing it.
+// Based on the semantic voxel from Kimera-Semantics
 struct SemanticVoxel {
-  uint32_t semantic_label = 0;  ///< Current MLE semantic label.
-  // TODO(nathan) top-K!
-  Eigen::VectorXf semantic_likelihoods;  ///< Per-label log-likelihood priors.
-  bool empty = true;  ///< Whether the voxel has been initialized.
+  //! Current MLE semantic label
+  uint32_t semantic_label = 0;
+  //! Log-likelihood priors of each label
+  Eigen::VectorXf semantic_likelihoods;
+  //! Labels assigned to each likelihood slot
+  Eigen::Matrix<uint32_t, Eigen::Dynamic, 1> semantic_labels;
+  //! Whether or not the voxel has been initialized
+  bool empty = true;
 };
 
-/// @brief One free-space tracking voxel: marks which parts of space are free with
-/// high confidence, with the timestamps and flags the active window needs to manage it.
+// Voxel to track which parts of space are free with high confidence.
 struct TrackingVoxel {
-  TimeStamp first_observed = 0;  ///< When the voxel was first observed (ns).
-  TimeStamp last_observed;       ///< When the voxel was last observed (ns).
-  TimeStamp last_occupied;       ///< When the voxel was last seen occupied (ns).
-  bool ever_free = false;        ///< Whether the voxel has ever been confidently free.
-  bool active = false;           ///< Whether the voxel is in the active window.
-  bool to_remove = false;        ///< Flagged for removal during maintenance.
+  // Time stamp [ns] when the voxel was last observed.
+  TimeStamp first_observed = 0;
+  TimeStamp last_observed;
+  TimeStamp last_occupied;
+  bool ever_free = false;
+  bool active = false;
+  bool to_remove = false;
 };
 
 // Block types.
-
-/// @brief A block of TsdfVoxels on the spatial hash. Carries per-aspect dirty
-/// flags (ESDF, mesh, tracking) on top of the base `updated` flag so each
-/// downstream consumer can iterate over only the blocks that changed for it.
 struct TsdfBlock : public spatial_hash::VoxelBlock<TsdfVoxel> {
   using Ptr = std::shared_ptr<TsdfBlock>;
   using ConstPtr = std::shared_ptr<const TsdfBlock>;
@@ -128,11 +114,10 @@ struct TsdfBlock : public spatial_hash::VoxelBlock<TsdfVoxel> {
             const BlockIndex& index)
       : spatial_hash::VoxelBlock<TsdfVoxel>(voxel_size, voxels_per_side, index) {}
 
-  mutable bool esdf_updated = false;      ///< Dirty for the ESDF/GVD consumer.
-  mutable bool mesh_updated = false;      ///< Dirty for the mesh consumer.
-  mutable bool tracking_updated = false;  ///< Dirty for the free-space tracker.
+  mutable bool esdf_updated = false;
+  mutable bool mesh_updated = false;
+  mutable bool tracking_updated = false;
 
-  /// @brief Mark the block dirty for every consumer.
   void setUpdated() const {
     updated = true;
     esdf_updated = true;
@@ -140,7 +125,6 @@ struct TsdfBlock : public spatial_hash::VoxelBlock<TsdfVoxel> {
     tracking_updated = true;
   }
 
-  /// @brief Clear every dirty flag.
   void clearUpdated() const {
     updated = false;
     esdf_updated = false;
@@ -148,22 +132,23 @@ struct TsdfBlock : public spatial_hash::VoxelBlock<TsdfVoxel> {
     tracking_updated = false;
   }
 
-  /// @brief Predicates for iterating over the blocks dirty for a given consumer.
+  // Function to enable iterating over update blocks.
   static bool esdfUpdated(const TsdfBlock& block) { return block.esdf_updated; }
   static bool meshUpdated(const TsdfBlock& block) { return block.mesh_updated; }
   static bool trackingUpdated(const TsdfBlock& block) { return block.tracking_updated; }
 };
 
-/// @brief A mesh block: a spatial-hash block that also is a mesh, holding the
-/// surface geometry reconstructed within its spatial extent.
 struct MeshBlock : public Mesh, public spatial_hash::Block {
   using Ptr = std::shared_ptr<MeshBlock>;
   using ConstPtr = std::shared_ptr<const MeshBlock>;
-  MeshBlock(const float block_size, const BlockIndex& index, bool has_labels = false, bool has_stamps = false)
-      : Mesh(true, has_stamps, has_labels, has_stamps), spatial_hash::Block(block_size, index) {}
+  MeshBlock(const float block_size,
+            const BlockIndex& index,
+            bool has_labels = false,
+            bool has_stamps = false)
+      : Mesh(true, has_stamps, has_labels, has_stamps),
+        spatial_hash::Block(block_size, index) {}
 };
 
-/// @brief A block of TrackingVoxels on the spatial hash, used by the free-space tracker.
 struct TrackingBlock : public spatial_hash::VoxelBlock<TrackingVoxel> {
   using Ptr = std::shared_ptr<TrackingBlock>;
   using ConstPtr = std::shared_ptr<const TrackingBlock>;
@@ -171,16 +156,15 @@ struct TrackingBlock : public spatial_hash::VoxelBlock<TrackingVoxel> {
                 const float voxels_per_side,
                 const BlockIndex& index)
       : spatial_hash::VoxelBlock<TrackingVoxel>(voxel_size, voxels_per_side, index) {}
-  bool has_active_data = false;  ///< Whether the block holds any active-window data.
+  bool has_active_data = false;
 };
 
-/// @brief A block of SemanticVoxels on the spatial hash.
 using SemanticBlock = spatial_hash::VoxelBlock<SemanticVoxel>;
 
-// Layer types: a full map is one layer per aspect, each a spatial hash of blocks.
-using TsdfLayer = spatial_hash::VoxelLayer<TsdfBlock>;          ///< TSDF distance/weight/color.
-using SemanticLayer = spatial_hash::VoxelLayer<SemanticBlock>;  ///< Per-voxel semantics.
-using MeshLayer = spatial_hash::BlockLayer<MeshBlock>;          ///< Reconstructed surface mesh.
-using TrackingLayer = spatial_hash::VoxelLayer<TrackingBlock>;  ///< Free-space tracking.
+// Layer types.
+using TsdfLayer = spatial_hash::VoxelLayer<TsdfBlock>;
+using SemanticLayer = spatial_hash::VoxelLayer<SemanticBlock>;
+using MeshLayer = spatial_hash::BlockLayer<MeshBlock>;
+using TrackingLayer = spatial_hash::VoxelLayer<TrackingBlock>;
 
 }  // namespace hydra

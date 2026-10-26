@@ -32,55 +32,34 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
-/**
- * @file loop_closure_config.h
- * @brief Top-level configuration for the loop-closure module and the
- *        declarations that register every loop-closure config struct with the
- *        configuration framework.
- */
 #pragma once
-#include "hydra/loop_closure/bow_agent_solver.h"
 #include "hydra/loop_closure/detector.h"
 
 namespace hydra {
 
-/// @brief Configuration for the loop-closure module, wrapping the detector
-/// settings together with module-level visualization and horizon parameters.
 struct LoopClosureConfig {
-  lcd::LcdDetectorConfig detector;        ///< Detector configuration.
-  bool visualize_dsg_lcd = false;          ///< Publish visualization output when true.
-  std::string lcd_visualizer_ns = "/dsg/lcd_visualizer";  ///< Namespace for visualization topics.
-  double lcd_agent_horizon_s = 1.5;        ///< Time window for selecting the query agent (s).
-  double descriptor_creation_horizon_m = 10.0;  ///< Radius around the query agent within which places are cached for description (m).
-  /// Agent-layer solver consulted when detector.enable_agent_registration is
-  /// set and no other solver has been installed at the agent layer. Letting it
-  /// resolve a match short-circuits the cascade before the place layer runs.
-  lcd::BowAgentSolver::Config bow_agent;
+  lcd::LcdDetectorConfig detector;
+  bool visualize_dsg_lcd = false;
+  std::string lcd_visualizer_ns = "/dsg/lcd_visualizer";
+  double lcd_agent_horizon_s = 1.5;
+  double descriptor_creation_horizon_m = 10.0;
+  //! Minimum time between two loop closures to the same node (0 disables)
+  double min_repeat_interval_s = 0.0;
 };
 
 namespace lcd {
-/// @brief Register the agent solver configuration fields.
-void declare_config(BowAgentSolver::Config& conf);
-/// @brief Register a per-layer matching and registration configuration.
 void declare_config(LayerLcdConfig& conf);
-/// @brief Register the layer registration configuration fields.
 void declare_config(LayerRegistrationConfig& conf);
-/// @brief Register the descriptor match configuration fields.
 void declare_config(DescriptorMatchConfig& conf);
-/// @brief Register the graph-network descriptor configuration fields.
 void declare_config(GnnLcdConfig& conf);
-/// @brief Register the detector configuration fields.
 void declare_config(LcdDetectorConfig& conf);
 }  // namespace lcd
 
-/// @brief Register the subgraph extraction configuration fields.
 void declare_config(SubgraphConfig& conf);
-/// @brief Register the loop-closure module configuration fields.
 void declare_config(LoopClosureConfig& conf);
 
 }  // namespace hydra
 
 namespace teaser {
-/// @brief Register the robust registration solver parameters.
 void declare_config(RobustRegistrationSolver::Params& conf);
 }  // namespace teaser

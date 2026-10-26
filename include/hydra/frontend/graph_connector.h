@@ -33,101 +33,67 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-#include <spark_dsg/layer_prefix.h>
-#include <spark_dsg/scene_graph_types.h>
+#include <spark_dsg/dynamic_scene_graph.h>
 
 #include <map>
 #include <memory>
 #include <set>
 #include <vector>
 
-namespace spark_dsg {
-class DynamicSceneGraph;
-}
-
-/**
- * @file graph_connector.h
- * @brief Maintains parent/child interlayer edges in the scene graph, attaching
- *        each child node to its nearest active parent.
- */
-
 namespace hydra {
 
-/// @brief Connects nodes in one set of child layers to their nearest parent in
-/// a single parent layer. Tracks which parents and children are active and
-/// rewires edges as nodes appear or become archived.
 struct LayerConnector {
-  /// @brief Settings for one parent layer and the child layers attached to it.
   struct Config {
-    /// @brief Selects a child layer and whether its static/dynamic nodes participate.
     struct ChildLayerConfig {
-      spark_dsg::LayerId layer = spark_dsg::DsgLayers::UNKNOWN;  ///< Child layer identifier.
-      bool include_static = true;   ///< Connect static nodes of this layer.
-      bool include_dynamic = true;  ///< Connect dynamic nodes of this layer.
+      //! Layer to find parents for
+      std::string layer = "";
+      //! Include nodes from partition=0
+      bool include_primary = true;
+      //! Include nodes from partition > 0
+      bool include_partitions = true;
     };
-
-    spark_dsg::LayerId parent_layer = spark_dsg::DsgLayers::PLACES;  ///< Parent layer; must be static.
+    //! Layer to find parents from
+    std::string parent_layer = spark_dsg::DsgLayers::PLACES;
+    //! All layers to find parents for (defaults to objects and agents)
     std::vector<ChildLayerConfig> child_layers{
-        {spark_dsg::DsgLayers::OBJECTS, true, true}};  ///< Child layers to attach to the parent.
-    size_t verbosity = 0;  ///< Logging verbosity for this connector.
+        {spark_dsg::DsgLayers::OBJECTS, true, true}};
+    //! Verbosity of graph connector
+    size_t verbosity = 0;
   } const config;
 
-  /// @brief Construct from config and precompute the static/dynamic child sets.
   explicit LayerConnector(const Config& config);
 
-  /// @brief Test whether a layer key belongs to a configured child layer.
-  bool isChild(const spark_dsg::LayerKey& key) const;
-
-  /// @brief Add new parent nodes to tracking and drop parents that became
-  /// archived or were removed, releasing their children.
-  /// @param graph Scene graph being inspected.
-  /// @param new_nodes Nodes added since the previous call.
   void updateParents(const spark_dsg::DynamicSceneGraph& graph,
                      const std::vector<spark_dsg::NodeId>& new_nodes);
 
-  /// @brief Track new child nodes and connect each active child to its nearest
-  /// active parent, replacing any prior parent edge.
-  /// @param graph Scene graph whose edges are updated in place.
-  /// @param new_nodes Nodes added since the previous call.
   void connectChildren(spark_dsg::DynamicSceneGraph& graph,
                        const std::vector<spark_dsg::NodeId>& new_nodes);
 
-  const spark_dsg::LayerKey parent_layer;                     ///< Resolved parent layer key.
-  std::set<spark_dsg::LayerId> static_child_layers;           ///< Child layers whose static nodes connect.
-  std::set<spark_dsg::LayerId> dynamic_child_layers;          ///< Child layers whose dynamic nodes connect.
-  std::set<spark_dsg::NodeId> active_children;                ///< Currently tracked child nodes.
-  std::map<spark_dsg::NodeId, std::set<spark_dsg::NodeId>>
-      active_parents;  ///< Active parents and the children attached to each.
+  // tracking
+  std::set<spark_dsg::NodeId> active_children;
+  std::map<spark_dsg::NodeId, std::set<spark_dsg::NodeId>> active_parents;
 };
 
-/// @brief Declare the config fields for a child-layer entry.
 void declare_config(LayerConnector::Config::ChildLayerConfig& config);
 
-/// @brief Declare the config fields for a layer connector.
 void declare_config(LayerConnector::Config& config);
 
-/// @brief Runs a set of LayerConnectors to maintain all interlayer parent/child
-/// edges each time the graph changes.
 class GraphConnector {
  public:
-  /// @brief Settings listing the per-layer connectors to run.
   struct Config {
-    std::vector<LayerConnector::Config> layers{LayerConnector::Config{}};  ///< Connectors to apply.
+    std::vector<LayerConnector::Config> layers{LayerConnector::Config{}};
   } const config;
 
-  /// @brief Construct and validate the configured layer connectors.
   explicit GraphConnector(const Config& config);
 
   virtual ~GraphConnector();
 
-  /// @brief Update every layer connector against the graph's newly added nodes.
   void connect(spark_dsg::DynamicSceneGraph& graph);
 
  protected:
-  std::vector<LayerConnector> layers_;  ///< Per-layer connectors.
+  std::vector<LayerConnector> layers_;
 };
 
-/// @brief Declare the config fields for the graph connector.
 void declare_config(GraphConnector::Config& config);
 
 }  // namespace hydra

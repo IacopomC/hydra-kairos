@@ -47,10 +47,10 @@
 // purposes notwithstanding any copyright notation herein.
 #include "hydra/reconstruction/volumetric_map.h"
 
+#include <sstream>
+
 #include <config_utilities/config_utilities.h>
 #include <config_utilities/parsing/yaml.h>
-
-#include <sstream>
 
 #include "hydra/utils/display_utilities.h"
 #include "hydra/utils/layer_io.h"
@@ -89,7 +89,7 @@ bool VolumetricMap::allocateBlock(const BlockIndex& index) {
     return false;
   }
   tsdf_layer_.allocateBlock(index);
-  // NOTE: the mesh block is intentionally not allocated here; the mesh integrator does.
+  // NOTE(lschmid): The mesh block is not allocated as the integrator will do this.
   if (semantic_layer_) {
     semantic_layer_->allocateBlock(index);
   }
@@ -153,11 +153,10 @@ VoxelTuple BlockTuple::getVoxels(const size_t linear_index) const {
 }
 
 void VolumetricMap::save(const std::string& filepath) const {
-  // TODO: consider hdf5 or something
-  // TODO: could use binary serialization tools to write a proper (single) file io
+  // TODO(nathan) consider hdf5 or something...
+  // TODO(lschmid): Can use binary serialization tools to write a proper (single) file
+  // io.
 
-  // Write the map config plus a semantics flag to a sidecar YAML, then dump each layer
-  // to its own file. Mesh and tracking layers are derived/transient and not persisted.
   YAML::Node config_node;
   config_node["map"] = config::toYaml(config);
   config_node["has_semantics"] = hasSemantics();
@@ -176,8 +175,6 @@ std::unique_ptr<VolumetricMap> VolumetricMap::load(const std::string& filepath) 
     return nullptr;
   }
 
-  // Cross-check the loaded TSDF geometry against the saved config; a mismatch means the
-  // files are inconsistent and the map cannot be reconstructed safely.
   const auto cpath = filepath + ".yaml";
   auto config = config::fromYamlFile<VolumetricMap::Config>(cpath, "map");
   if (std::abs(config.voxel_size - tsdf->voxel_size) > 1.0e-5) {
@@ -216,18 +213,21 @@ VolumetricMap::MemoryStats VolumetricMap::memoryStats() const {
     stats.semantic_bytes =
         stats.semantic_blocks * voxels_per_block * sizeof(SemanticVoxel);
   }
+
   return stats;
 }
 
 std::string VolumetricMap::printStats() const {
+  // counts voxel storage only: block bookkeeping and the mesh are not included
   const auto stats = memoryStats();
   std::stringstream ss;
   ss << "TSDF: " << stats.tsdf_blocks << " blocks, "
      << getHumanReadableMemoryString(stats.tsdf_bytes);
   if (semantic_layer_) {
-    ss << "; SEMANTICS: " << stats.semantic_blocks << " blocks, >="
+    ss << ", SEMANTICS: " << stats.semantic_blocks << " blocks, "
        << getHumanReadableMemoryString(stats.semantic_bytes);
   }
+
   return ss.str();
 }
 
@@ -249,8 +249,6 @@ std::unique_ptr<VolumetricMap> VolumetricMap::clone() const {
 }
 
 std::unique_ptr<VolumetricMap> VolumetricMap::cloneUpdated() const {
-  // Build a partial copy containing only the blocks flagged as updated, so consumers can
-  // process recent changes without copying the entire map.
   auto map = std::make_unique<VolumetricMap>(config);
   const auto blocks = tsdf_layer_.blockIndicesWithCondition(
       [](const auto& block) { return block.updated; });

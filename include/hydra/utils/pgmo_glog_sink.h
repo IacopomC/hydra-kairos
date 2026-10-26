@@ -35,18 +35,14 @@
 #pragma once
 #include <kimera_pgmo/utils/logging.h>
 
-/**
- * @file pgmo_glog_sink.h
- * @brief Log sink that forwards mesh-deformation library log entries into glog, so that
- *        library's messages share the application's logging output.
- */
-
 namespace hydra {
 
-/// @brief Log sink that routes mesh-deformation log entries to glog.
 struct PgmoGlogSink : logging::LogSink {
-  /// @brief Emit a single log entry through glog at the entry's severity.
+  explicit PgmoGlogSink(int debug_verbosity = 1);
+
   void dispatch(const logging::LogEntry& entry) const override;
+
+  const int debug_verbosity;
 };
 
 }  // namespace hydra

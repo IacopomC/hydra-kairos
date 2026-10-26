@@ -37,34 +37,23 @@
 
 #include "hydra/backend/update_functions.h"
 
-/**
- * @file update_frontiers_functor.h
- * @brief Update functor for frontier places. The update step itself does no
- *        work; the cleanup hook removes frontier places once the robot gets
- *        close to them or once they fall inside a real place.
- */
-
 namespace hydra {
 
-/// @brief Removes stale frontier places near the robot during cleanup.
 struct UpdateFrontiersFunctor : public UpdateFunctor {
   struct Config {
-    double frontier_removal_check_threshold = 4;  ///< Frontiers within this distance of the robot are tested for removal.
-    double frontier_removal_threshold = 1;        ///< Frontiers within this distance of the robot are removed outright.
+    //! Frontiers with in this distance of the robot will be checked against places for
+    //! potential removal
+    double frontier_removal_check_threshold = 4;
+    //! Frontiers within this distance of the robot will be removed
+    double frontier_removal_threshold = 1;
   } const config;
 
-  /// @brief Constructs the functor from its configuration.
   explicit UpdateFrontiersFunctor(const Config& config) : config(config) {}
-  /// @brief Exposes the cleanup hook that prunes frontier places.
   Hooks hooks() const override;
-  /// @brief No-op update; frontier maintenance happens in cleanup().
   void call(const DynamicSceneGraph& unmerged,
             SharedDsgInfo&,
             const UpdateInfo::ConstPtr&) const override;
 
-  /// @brief Removes frontier places that the robot has reached or that now lie inside a real place.
-  /// @param timestamp_ns Current timestamp (ns).
-  /// @param dsg Shared graph whose frontier places are pruned.
   void cleanup(uint64_t timestamp_ns, SharedDsgInfo& dsg) const;
 
  private:

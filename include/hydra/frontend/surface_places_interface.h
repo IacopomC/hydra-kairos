@@ -34,49 +34,33 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
+#include <spark_dsg/dynamic_scene_graph.h>
+
 #include "hydra/active_window/active_window_output.h"
-#include "hydra/common/dsg_types.h"
-#include "hydra/places/gvd_voxel.h"
-#include "hydra/utils/log_utilities.h"
 
 namespace kimera_pgmo {
 class MeshDelta;
-}
-
-/**
- * @file surface_places_interface.h
- * @brief Abstract interface for extracting surface (mesh-derived) place nodes
- *        and inserting them into the scene graph.
- */
+struct MeshOffsetInfo;
+}  // namespace kimera_pgmo
 
 namespace hydra {
 
-/// @brief Interface for a surface place extractor. Implementations cluster
-/// mesh vertices into places, write them into the scene graph, and report
-/// which place nodes are currently active.
 class SurfacePlacesInterface {
  public:
   SurfacePlacesInterface() {}
 
   virtual ~SurfacePlacesInterface() = default;
 
-  /// @brief Persist any internal state for offline inspection.
-  virtual void save(const LogSetup& /* logs */) const {}
-
-  /// @brief Detect surface places from the latest mesh update.
-  /// @param msg Active-window output for the current step.
-  /// @param mesh_delta Incremental mesh change to cluster over.
-  /// @param graph Current scene graph, read for context.
   virtual void detect(const ActiveWindowOutput& msg,
                       const kimera_pgmo::MeshDelta& mesh_delta,
-                      const DynamicSceneGraph& graph) = 0;
+                      const kimera_pgmo::MeshOffsetInfo& offsets,
+                      const spark_dsg::DynamicSceneGraph& graph) = 0;
 
-  /// @brief Write the detected surface places into the scene graph.
   virtual void updateGraph(uint64_t timestamp_ns,
                            const ActiveWindowOutput& msg,
-                           DynamicSceneGraph& graph) = 0;
+                           const kimera_pgmo::MeshOffsetInfo& offsets,
+                           spark_dsg::DynamicSceneGraph& graph) = 0;
 
-  /// @brief Return the set of place nodes currently considered active.
   virtual NodeIdSet getActiveNodes() const = 0;
 };
 

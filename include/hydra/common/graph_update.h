@@ -33,82 +33,51 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
+#include <spark_dsg/dynamic_scene_graph.h>
 #include <spark_dsg/node_attributes.h>
 #include <spark_dsg/node_symbol.h>
 
 #include <list>
 #include <map>
 
-/**
- * @file graph_update.h
- * @brief Batched insertion of new nodes into a scene graph. Collects pending
- *        node attributes per layer, tracks the next free symbol id per layer,
- *        and applies the accumulated update to a target graph.
- */
-
-namespace spark_dsg {
-class DynamicSceneGraph;
-}
-
 namespace hydra {
 
-/// @brief Pending node insertions for a single scene-graph layer.
 struct LayerUpdate {
   using Ptr = std::shared_ptr<LayerUpdate>;
-  /// @brief Construct an empty update bound to a layer.
-  /// @param layer Layer the queued nodes belong to.
   explicit LayerUpdate(spark_dsg::LayerId layer);
-  /// @brief Move the node attributes from another update into this one.
-  /// @param other Update whose attributes are consumed.
   void append(LayerUpdate&& other);
 
-  const spark_dsg::LayerId layer;  ///< Layer these nodes belong to.
-  std::list<spark_dsg::NodeAttributes::Ptr> attributes;  ///< Attributes of the nodes to add.
+  const spark_dsg::LayerId layer;
+  std::list<spark_dsg::NodeAttributes::Ptr> attributes;
 };
 
-/// @brief A set of per-layer node insertions keyed by layer id.
 using GraphUpdate = std::map<spark_dsg::LayerId, LayerUpdate::Ptr>;
 
-/// @brief Allocates successive node symbols for one layer during updates.
 struct LayerTracker {
-  /// @brief Configuration controlling symbol allocation for a layer.
   struct Config {
-    char prefix = 0;  ///< Symbol prefix for ids minted in this layer.
-    std::optional<spark_dsg::LayerId> target_layer;  ///< Layer to place new nodes in, if remapped.
+    char prefix = 0;
+    std::optional<spark_dsg::LayerId> target_layer;
   } const config;
 
-  /// @brief Construct a tracker starting from the first id for the prefix.
-  /// @param config Allocation settings for the layer.
   explicit LayerTracker(const Config& config);
 
-  spark_dsg::NodeSymbol next_id;  ///< Next symbol to assign to a new node.
+  spark_dsg::NodeSymbol next_id;
 };
 
-/// @brief Register the layer tracker config fields with the config system.
 void declare_config(LayerTracker::Config& config);
 
-/// @brief Applies batched node insertions to a scene graph.
-/// Holds one tracker per configured layer so newly added nodes receive
-/// consistent, monotonically increasing symbol ids.
 struct GraphUpdater {
-  /// @brief Configuration mapping layer names to their tracker settings.
   struct Config {
-    std::map<std::string, LayerTracker::Config> layer_updates;  ///< Per-layer tracker settings keyed by layer name.
+    std::map<std::string, LayerTracker::Config> layer_updates;
   } const config;
 
-  /// @brief Construct an updater and its per-layer trackers from config.
-  /// @param config Per-layer allocation settings.
   explicit GraphUpdater(const Config& config);
-  /// @brief Insert the queued nodes into the graph, assigning ids per layer.
-  /// @param update Pending insertions grouped by layer.
-  /// @param graph Graph to add the new nodes to.
   void update(const GraphUpdate& update, spark_dsg::DynamicSceneGraph& graph);
 
  private:
-  std::map<spark_dsg::LayerId, LayerTracker> trackers_;  ///< Id allocators keyed by layer.
+  std::map<std::string, LayerTracker> trackers_;
 };
 
-/// @brief Register the graph updater config fields with the config system.
 void declare_config(GraphUpdater::Config& config);
 
 }  // namespace hydra

@@ -37,48 +37,26 @@
 
 #include "hydra/common/dsg_types.h"
 
-/**
- * @file disjoint_set.h
- * @brief Union-find structure over scene graph node ids. Each node starts in its own set
- *        and sets are merged by size, with the larger set's representative kept as the
- *        root of the union.
- */
-
 namespace hydra {
 
-/// @brief Disjoint-set (union-find) over node ids, merging by set size.
 struct DisjointSet {
-  /// @brief Construct an empty structure with no sets.
   DisjointSet();
 
-  /// @brief Construct one singleton set per node in the given layer.
   explicit DisjointSet(const SceneGraphLayer& layer);
 
   virtual ~DisjointSet() = default;
 
-  /// @brief Report whether the node has been added to any set.
   bool hasSet(NodeId node) const;
 
-  /// @brief Find the representative root of the set containing the node.
   NodeId findSet(NodeId node) const;
 
-  /// @brief Add a node as its own singleton set.
-  /// @param node Node to add.
-  /// @return True if added, false if the node was already present.
   bool addSet(NodeId node);
 
-  /// @brief Merge the sets containing two nodes.
-  /// The larger set's root becomes the root of the merged set; on a size tie the
-  /// rhs_better flag forces the right-hand set's root to be kept.
-  /// @param lhs A node in the first set.
-  /// @param rhs A node in the second set.
-  /// @param rhs_better Tie-breaker that prefers the right-hand root when sizes are equal.
-  /// @return The root that was absorbed as a child, or nullopt if already in one set.
   std::optional<NodeId> doUnion(NodeId lhs, NodeId rhs, bool rhs_better = false);
 
-  std::unordered_set<NodeId> roots;             ///< Current set representatives.
-  std::unordered_map<NodeId, NodeId> parents;   ///< Parent pointer for each node.
-  std::unordered_map<NodeId, size_t> sizes;     ///< Size of the set rooted at each root.
+  std::unordered_set<NodeId> roots;
+  std::unordered_map<NodeId, NodeId> parents;
+  std::unordered_map<NodeId, size_t> sizes;
 };
 
 }  // namespace hydra

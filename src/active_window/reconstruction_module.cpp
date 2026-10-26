@@ -39,12 +39,15 @@
 #include <config_utilities/validation.h>
 
 #include <chrono>
+#include <iomanip>
 
 #include "hydra/common/global_info.h"
 #include "hydra/input/input_conversion.h"
 #include "hydra/places/robot_footprint_integrator.h"
+#include "hydra/reconstruction/integration_masking.h"
 #include "hydra/reconstruction/mesh_integrator.h"
 #include "hydra/reconstruction/projective_integrator.h"
+#include "hydra/utils/printing.h"
 #include "hydra/utils/timing_utilities.h"
 
 namespace hydra {
@@ -61,6 +64,14 @@ double diffInSeconds(uint64_t lhs, uint64_t rhs) {
   return std::chrono::duration_cast<std::chrono::duration<double>>(
              std::chrono::nanoseconds(lhs) - std::chrono::nanoseconds(rhs))
       .count();
+}
+
+std::string printRotation(const Eigen::Matrix3d& rot) {
+  const Eigen::Quaterniond q(rot);
+  std::stringstream ss;
+  ss << std::setprecision(3) << "{w: " << q.w() << ", x: " << q.x() << ", y: " << q.y()
+     << ", z: " << q.z() << "}";
+  return ss.str();
 }
 
 }  // namespace
@@ -116,8 +127,11 @@ ActiveWindowOutput::Ptr ReconstructionModule::spinOnce(const InputPacket& msg) {
 
   const auto timestamp_ns = msg.timestamp_ns;
   const auto world_T_body = msg.world_T_body();
-  // The TSDF is integrated every frame, but the expensive mesh/archive pass only
-  // runs once enough time has elapsed since the previous full update.
+  const auto fmt = getDefaultFormat();
+  VLOG(5) << "[Hydra Reconstruction] Got input @ " << timestamp_ns
+          << " [ns] with pose: p=" << world_T_body.translation().format(fmt)
+          << ", q=" << printRotation(world_T_body.rotation());
+
   const auto do_full_update = shouldUpdate(timestamp_ns);
 
   VLOG(2) << "[Hydra Reconstruction] starting " << (do_full_update ? "full" : "partial")
@@ -125,28 +139,37 @@ ActiveWindowOutput::Ptr ReconstructionModule::spinOnce(const InputPacket& msg) {
           << " message(s) left)";
 
   ScopedTimer timer("reconstruction/spin", timestamp_ns);
-  InputData::Ptr data = conversions::parseInputPacket(msg);
+  // force semantic normalization if volumetric map has semantic layer
+  InputData::Ptr data = conversions::parseInputPacket(msg, false, map_.hasSemantics());
   if (!data) {
     return nullptr;
   }
 
+  // TODO(nathan) cache somewhere
+  const auto label_config = GlobalInfo::instance().getLabelSpaceConfig();
+  std::set<int32_t> invalid_labels;
+  invalid_labels.insert(label_config.invalid_labels.begin(),
+                        label_config.invalid_labels.end());
+  invalid_labels.insert(label_config.dynamic_labels.begin(),
+                        label_config.dynamic_labels.end());
+
+  cv::Mat integration_mask;
+  maskInvalidSemantics(data->label_image, invalid_labels, integration_mask);
+
   {  // timing scope
-    // Fold the new depth/semantic observation into the TSDF, then carve out the
-    // volume swept by the robot footprint as known free space.
     ScopedTimer timer("reconstruction/tsdf", timestamp_ns);
-    tsdf_integrator_->updateMap(*data, map_);
+    tsdf_integrator_->updateMap(*data, map_, true, integration_mask);
     if (footprint_integrator_) {
       footprint_integrator_->markFreespace(world_T_body.cast<float>(), map_);
     }
   }  // timing scope
 
-  // Nothing downstream to emit if the map is still empty or this is a partial
-  // (TSDF-only) update; the integration above is still retained for next time.
   auto& tsdf = map_.getTsdfLayer();
   if (tsdf.numBlocks() == 0 || !do_full_update) {
     return nullptr;
   }
 
+  last_update_ns_ = timestamp_ns;
   {  // timing scope
     ScopedTimer timer("reconstruction/mesh", timestamp_ns);
     mesh_integrator_->generateMesh(map_, true, true);
@@ -157,16 +180,12 @@ ActiveWindowOutput::Ptr ReconstructionModule::spinOnce(const InputPacket& msg) {
 
   // this comes before clearing the update flag as we don't archive updated blocks
   if (map_window_) {
-    // Evict blocks that have fallen outside the active window; their indices are
-    // reported so downstream consumers can finalize the archived geometry.
     output->archived_mesh_indices =
         map_window_->archiveBlocks(timestamp_ns, world_T_body, map_);
     VLOG(2) << "[Hydra Reconstruction] archived "
             << output->archived_mesh_indices.size() << " @ " << timestamp_ns << " [ns]";
   }
 
-  // Hand off a snapshot of only the blocks touched this pass, then reset their
-  // updated flags so the next update starts from a clean slate.
   output->setMap(map_.cloneUpdated());
   for (const auto& block : tsdf) {
     block.clearUpdated();

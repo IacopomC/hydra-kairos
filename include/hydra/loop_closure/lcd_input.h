@@ -32,12 +32,6 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
-/**
- * @file lcd_input.h
- * @brief Payload handed from the frontend to the loop-closure module for one
- *        update: which agent nodes are newly available to query and which
- *        place nodes have just been archived.
- */
 #pragma once
 #include <spark_dsg/scene_graph_types.h>
 
@@ -47,14 +41,12 @@
 
 namespace hydra {
 
-/// @brief Per-update input describing the agent and place nodes the loop-closure
-/// module should consider on the next spin.
 struct LcdInput {
-  using Ptr = std::shared_ptr<LcdInput>;  ///< Shared handle to an input packet.
-  uint64_t timestamp_ns;                  ///< Timestamp of this update in nanoseconds.
-  uint64_t sequence_number;               ///< Monotonic identifier of the update.
-  std::unordered_set<spark_dsg::NodeId> archived_places;  ///< Place nodes finalized this update.
-  std::vector<spark_dsg::NodeId> new_agent_nodes;         ///< Agent nodes added this update.
+  using Ptr = std::shared_ptr<LcdInput>;
+  uint64_t timestamp_ns;
+  uint64_t sequence_number;
+  std::unordered_set<spark_dsg::NodeId> archived_places;
+  std::vector<spark_dsg::NodeId> new_agent_nodes;
 };
 
 }  // namespace hydra

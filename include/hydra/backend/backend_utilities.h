@@ -35,64 +35,17 @@
 #pragma once
 
 #include <gtsam/inference/Symbol.h>
-#include <gtsam/nonlinear/Values.h>
+#include <kimera_pgmo/mesh_offset_info.h>
 
-#include "hydra/common/dsg_types.h"
 #include "hydra/common/shared_dsg_info.h"
-
-/**
- * @file backend_utilities.h
- * @brief Helper routines shared by backend update functors. Covers timestamp
- *        lookups, remapping of surface-place mesh connections through a mesh
- *        delta, set-union merging of index containers, and expanding sparse
- *        keyframe poses back to the full set of dense frames.
- */
-
-namespace kimera_pgmo {
-class MeshDelta;
-class SparseKeyframe;
-}  // namespace kimera_pgmo
 
 namespace hydra::utils {
 
-/// @brief Maps a key in the dense frame space to its sparse representative.
-using KeyMap = std::unordered_map<gtsam::Key, gtsam::Key>;
-/// @brief Maps a sparse key to the keyframe that owns its dense members.
-using FrameMap = std::unordered_map<gtsam::Key, kimera_pgmo::SparseKeyframe>;
+std::optional<uint64_t> getTimeNs(const spark_dsg::DynamicSceneGraph& graph,
+                                  gtsam::Symbol key);
 
-/// @brief Looks up the timestamp of the node identified by a gtsam key.
-/// @param graph Scene graph containing the node.
-/// @param key Symbol identifying the node.
-/// @return Timestamp in nanoseconds, or empty if the node is missing.
-std::optional<uint64_t> getTimeNs(const DynamicSceneGraph& graph, gtsam::Symbol key);
+void updatePlaces2d(SharedDsgInfo::Ptr dsg, const kimera_pgmo::MeshOffsetInfo& offsets);
 
-/// @brief Remaps a surface place's mesh-vertex connections through a mesh delta,
-/// dropping deleted indices and refreshing the cached index bounds.
-/// @param attrs Surface-place attributes to update in place.
-/// @param mesh_update Mesh delta describing deleted and remapped vertices.
-/// @param num_archived_vertices Count of vertices already archived out of the active window.
-void updatePlace2dMesh(Place2dNodeAttributes& attrs,
-                       const kimera_pgmo::MeshDelta& mesh_update,
-                       const size_t num_archived_vertices);
-
-/// @brief Remaps a surface place's boundary mesh connections through a mesh delta.
-/// @param attrs Surface-place attributes to update in place.
-/// @param mesh_update Mesh delta describing deleted and remapped vertices.
-void updatePlace2dBoundary(Place2dNodeAttributes& attrs,
-                           const kimera_pgmo::MeshDelta& mesh_update);
-
-/// @brief Applies a mesh delta to every surface place in the graph.
-/// @param dsg Shared graph whose surface places are updated.
-/// @param mesh_update Mesh delta describing deleted and remapped vertices.
-/// @param num_archived_vertices Count of vertices already archived out of the active window.
-void updatePlaces2d(SharedDsgInfo::Ptr dsg,
-                    kimera_pgmo::MeshDelta& mesh_update,
-                    size_t num_archived_vertices);
-
-/// @brief Merges the contents of one index container into another as a sorted union.
-/// @tparam T Container of comparable indices.
-/// @param from Source container whose elements are folded in.
-/// @param to Destination container, replaced with the union of both inputs.
 template <typename T>
 void mergeIndices(const T& from, T& to) {
   std::vector<typename T::value_type> from_indices(from.begin(), from.end());
@@ -107,14 +60,5 @@ void mergeIndices(const T& from, T& to) {
                  to_indices.end(),
                  std::back_inserter(to));
 }
-
-/// @brief Expands optimized sparse keyframe poses to the full set of dense frames.
-/// @param full_sparse_frame_map Mapping from each dense key to its sparse representative.
-/// @param sparse_frames Sparse keyframes holding the dense members and their relative poses.
-/// @param sparse_values Optimized poses for the sparse keys.
-/// @return Values containing a pose for every dense frame.
-gtsam::Values getDenseFrames(const KeyMap& full_sparse_frame_map,
-                             const FrameMap& sparse_frames,
-                             const gtsam::Values& sparse_values);
 
 }  // namespace hydra::utils

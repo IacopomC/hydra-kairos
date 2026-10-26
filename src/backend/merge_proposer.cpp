@@ -54,8 +54,7 @@ Merge Merge::remap(const std::map<NodeId, NodeId>& remapping) const {
 }
 
 std::ostream& operator<<(std::ostream& out, const Merge& merge) {
-  out << NodeSymbol(merge.from).getLabel() << "  -> "
-      << NodeSymbol(merge.to).getLabel();
+  out << NodeSymbol(merge.from).str() << "  -> " << NodeSymbol(merge.to).str();
   return out;
 }
 
@@ -70,8 +69,6 @@ void MergeProposer::findMerges(const SceneGraphLayer& layer,
                                const LayerView& view,
                                const MergeCheck& should_merge,
                                MergeList& nodes_to_merge) const {
-  // The association strategy supplies, per node, the set of nearby nodes worth
-  // testing as merge partners (e.g. spatial neighbors).
   const auto associator = config.strategy.create<const SceneGraphLayer&>(layer);
   if (!associator) {
     LOG(WARNING) << "Merges enabled, but factory not specified!";

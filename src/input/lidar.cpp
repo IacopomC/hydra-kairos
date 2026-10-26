@@ -80,12 +80,6 @@ Lidar::Lidar(const Config& config, const std::string& name)
       vertical_fov_rad_(config_.vertical_fov * M_PI / 180.0f),
       vertical_fov_top_rad_(config_.vertical_fov_top * M_PI / 180.0f),
       horizontal_fov_rad_(config_.horizontal_fov * M_PI / 180.0f) {
-  // Build the four side-plane normals of the LiDAR frustum. Each plane is
-  // defined by the cross product of two unit-distance corner rays; the elevation
-  // (phi) bounds set the top/bottom planes and the azimuth (theta) bound sets
-  // the left/right planes. For asymmetric scanners the top limit is given
-  // explicitly and the bottom limit is derived as top minus the total vertical FOV.
-  //
   // compute upper phi limit and associated z at unit focal distance
   const auto phi_up =
       config_.is_asymmetric ? vertical_fov_top_rad_ : vertical_fov_rad_ / 2.0f;
@@ -106,9 +100,6 @@ Lidar::Lidar(const Config& config, const std::string& name)
                                .normalized();
 
   const auto half_fov = horizontal_fov_rad_ / 2.0f;
-  // For a horizontal half-FOV beyond 90 degrees the side ray would point
-  // backwards along +x, so reflect the angle about 90 degrees and flip x to keep
-  // tan(theta) finite while still encoding the correct plane orientation.
   // compute left theta extent and flip if greater than 90 degrees
   const auto theta_left = half_fov >= M_PI / 2.0f ? M_PI - half_fov : half_fov;
   // flip associated unit focal length if required and compute actual coordinates
@@ -127,8 +118,6 @@ Lidar::Lidar(const Config& config, const std::string& name)
 float Lidar::getPointDepth(const Eigen::Vector3f& p) const { return p.norm(); }
 
 float Lidar::computeRayDensity(float voxel_size, float depth) const {
-  // Approximate the spherical scanner with a pinhole model so the same
-  // ray-density formula as the camera can be reused.
   // we want rays per meter... we can do this by computing a virtual focal length
   // compute focal lengths based on percent of spherical image inside 90 degree FOV
   // focal_length = (dim / 2) / tan(fov / 2) and tan(fov / 2) = 1
@@ -144,7 +133,7 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
     return false;
   }
 
-  // TODO: check that input is normalized
+  // TODO(nathan) check that input is normalized
 
   if (input.vertex_map.size() != input.label_image.size()) {
     LOG(ERROR) << "label input size does not match pointcloud!";
@@ -157,10 +146,9 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
     return false;
   }
 
-  // TODO: think about structured points
+  // TODO(nathan) think about structured points
 
-  // TODO: test
-  // Optionally bake the sensor pose into the points so they live in the world frame.
+  // TODO(nathan) test
   if (force_world_frame && !input.points_in_world_frame) {
     const auto world_T_sensor = input.getSensorPose().cast<float>();
     auto point_iter = input.vertex_map.begin<cv::Vec3f>();
@@ -176,14 +164,10 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
     input.points_in_world_frame = true;
   }
 
-  // Inverse pose is needed to bring world-frame points back into the sensor
-  // frame before spherical projection into the range image.
   const auto sensor_T_world = input.getSensorPose().cast<float>().inverse();
   input.min_range = std::numeric_limits<float>::max();
   input.max_range = std::numeric_limits<float>::lowest();
 
-  // Allocate the output range image (0 marks an empty pixel) plus aligned label
-  // and optional color images sharing the same projected layout.
   bool has_color = !input.color_image.empty();
   input.range_image = cv::Mat(height_, width_, CV_32FC1, 0.0f);
   cv::Mat labels(height_, width_, CV_32SC1, -1);
@@ -194,9 +178,10 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
   }
 
   cv::Mat vertex_image;
-  // If the incoming cloud is not already laid out as a height_ x width_ range
-  // image, build a fresh structured vertex image while projecting.
-  bool not_structured = (input.vertex_map.rows != width_) || (input.vertex_map.cols != height_);
+  bool not_structured =
+      (input.vertex_map.rows != width_) || (input.vertex_map.cols != height_);
+  // NOTE(hyungtae) In case the points are not structured, it automatically generates a
+  // vertex image
   if (not_structured) {
     vertex_image = cv::Mat(height_, width_, CV_32FC3, cv::Scalar(0.0, 0.0, 0.0));
   }
@@ -206,16 +191,25 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
   size_t num_invalid = 0;
   size_t color_index = 0;
   while (point_iter != input.vertex_map.end<cv::Vec3f>()) {
-    int u, v;
     const auto& p = *point_iter;
     Eigen::Vector3f p_C(p[0], p[1], p[2]);
-    // Project in the sensor frame, so undo the world transform if present.
     if (input.points_in_world_frame) {
       p_C = sensor_T_world * p_C;
     }
 
-    // Drop points that fall outside the spherical image bounds.
-    if (!projectPointToImagePlane(p_C, u, v)) {
+    // get float projection in [0, w] x [0, h]
+    float u_coord, v_coord;
+    projectPointToImagePlane(p_C, u_coord, v_coord);
+
+    // NOTE(nathan) typically we take the floor of any projection (which gives us the
+    // pixel the ray falls into). This is not ideal for handling slightly misaligned
+    // point clouds to the image coordinates. Rounding the projected coordinates should
+    // bin the distribution of bearings correctly (and should work like adding a
+    // constant offset to the pixel coordinates)
+    // TODO(nathan) think about PCL implementation
+    int u = std::round(u_coord);
+    int v = std::round(v_coord);
+    if (u < 0 || u >= width_ || v < 0 || v >= height_) {
       ++num_invalid;
       ++point_iter;
       ++label_iter;
@@ -227,15 +221,16 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
     input.min_range = std::min(input.min_range, range_m);
     input.max_range = std::max(input.max_range, range_m);
 
-    // Z-buffer: keep only the closest point per pixel (empty pixels hold 0).
-    // If the pixel has already been updated with a closer point, skip the procedure below
-    if (!(input.range_image.at<float>(v, u) == 0.0f || range_m < input.range_image.at<float>(v, u))) {
+    // If the pixel has already been updated with a closer point, skip the procedure
+    // below
+    if (!(input.range_image.at<float>(v, u) == 0.0f ||
+          range_m < input.range_image.at<float>(v, u))) {
       ++point_iter;
       ++label_iter;
       ++color_index;
       continue;
     }
-    
+
     input.range_image.at<float>(v, u) = range_m;
     labels.at<int32_t>(v, u) = *label_iter;
     if (has_color) {
@@ -263,18 +258,16 @@ bool Lidar::finalizeRepresentations(InputData& input, bool force_world_frame) co
   return true;
 }
 
-// TODO: this isn't correct for all asymmetric cases
+// TODO(nathan) this isn't correct for all asymmetric cases
 bool Lidar::projectPointToImagePlane(const Eigen::Vector3f& p_C,
                                      float& u,
                                      float& v) const {
-  // Points closer than the minimum range carry no usable measurement.
   if (p_C.norm() <= config_.min_range) {
     return false;
   }
 
   // map lidar point to [0, w] x [0, h]
   // assumes forward-left-up and fov center aligned with x-axis for a spherical model
-  // Convert the bearing to spherical angles: phi is elevation, theta is azimuth.
   const auto bearing = p_C.normalized();
   const auto phi = std::asin(bearing.z());
   const auto theta = std::atan2(bearing.y(), bearing.x());
@@ -282,20 +275,19 @@ bool Lidar::projectPointToImagePlane(const Eigen::Vector3f& p_C,
   if (config_.is_asymmetric) {
     // phi is [-pi/2, pi/2], ratio is [1, 0], maps to [height, 0]
     const auto vertical_ratio = (vertical_fov_top_rad_ - phi) / vertical_fov_rad_;
-    v = height_ * vertical_ratio + 0.5;
+    v = height_ * vertical_ratio;
   } else {
     // phi is [-pi/2, pi/2], ratio is [1, 0], maps to [height, 0]
     const auto vertical_ratio = (vertical_fov_rad_ / 2.0f - phi) / vertical_fov_rad_;
-    v = height_ * vertical_ratio + 0.5;
+    v = height_ * vertical_ratio;
   }
 
   if (v < 0.0f || v > height_) {
     return false;
   }
 
-  // Azimuth maps left-to-right across the image columns the same way.
   const auto h_ratio = (horizontal_fov_rad_ / 2.0f - theta) / horizontal_fov_rad_;
-  u = width_ * h_ratio + 0.5;
+  u = width_ * h_ratio;
   if (u < 0.0f || u > width_) {
     return false;
   }
@@ -322,14 +314,10 @@ bool Lidar::projectPointToImagePlane(const Eigen::Vector3f& p_C, int& u, int& v)
 
 bool Lidar::pointIsInViewFrustum(const Eigen::Vector3f& point_C,
                                  float inflation_distance) const {
-  // Reject anything beyond max range first (cheapest cull).
   if (point_C.norm() > config_.max_range + inflation_distance) {
     return false;
   }
 
-  // The elevation (top/bottom) limits are rotationally symmetric about the z
-  // axis, so collapse the point into the x-z plane (radius_2d, 0, z) before
-  // testing against the top and bottom planes.
   double radius_2d = std::sqrt(point_C.x() * point_C.x() + point_C.y() * point_C.y());
   Eigen::Vector3f point_C_2d(radius_2d, 0, point_C.z());
   if (point_C_2d.dot(top_frustum_normal_) < -inflation_distance) {
@@ -340,18 +328,13 @@ bool Lidar::pointIsInViewFrustum(const Eigen::Vector3f& point_C,
     return false;
   }
 
-  // Azimuth limits use the full 3D point against the left/right planes.
   const auto left_prod = point_C.dot(left_frustum_normal_);
   const auto right_prod = point_C.dot(right_frustum_normal_);
   if (horizontal_fov_rad_ <= M_PI) {
-    // For FOV up to 180 degrees the valid wedge is the intersection of both
-    // half-spaces, so the point must be inside both planes.
     // normal camera or half-plane case
     return left_prod >= -inflation_distance && right_prod >= -inflation_distance;
   }
 
-  // For FOV above 180 degrees the planes instead bound a narrow excluded wedge
-  // behind the sensor, so reject only points inside that excluded region.
   // check to make sure that we're not in the exluded region
   return !(left_prod <= -inflation_distance && right_prod <= -inflation_distance);
 }

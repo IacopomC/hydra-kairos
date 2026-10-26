@@ -3,7 +3,6 @@
 #include <glog/logging.h>
 #include <pybind11/stl/filesystem.h>
 
-#include <cstdlib>
 #include <iostream>
 
 namespace hydra::python {
@@ -27,29 +26,21 @@ void GlogSingleton::setLogLevel(int log_level, int verbosity, bool override_sett
   configured_ = true;
 }
 
-void GlogSingleton::setLogDirectory(const std::string& dirname) {
+void GlogSingleton::setLogDirectory(const std::string& dirname,
+                                    int min_stderr_threshold) {
   std::cerr << "[Hydra Python] Logging to: " << dirname << std::endl;
   FLAGS_log_dir = dirname;
   FLAGS_logtostderr = false;
   FLAGS_alsologtostderr = false;
-  FLAGS_stderrthreshold = 1;
+  FLAGS_stderrthreshold = min_stderr_threshold;
   FLAGS_minloglevel = 0;
   FLAGS_v = 5;
 }
 
 GlogSingleton::GlogSingleton() {
   FLAGS_logtostderr = true;
-  // _hydra_bindings and _kairos_bindings each compile their own GlogSingleton
-  // (static), but share a single libglog. Without this guard the second module
-  // to construct its singleton calls InitGoogleLogging() on the already-
-  // initialized shared glog and aborts ("You called InitGoogleLogging() twice").
-  // glog 0.4 (focal) does not expose google::IsGoogleLoggingInitialized() in a
-  // public header, so coordinate across modules with a process-global env flag.
-  if (!std::getenv("HYDRA_PY_GLOG_INITIALIZED")) {
-    google::InitGoogleLogging("hydra_python");
-    google::InstallFailureSignalHandler();
-    ::setenv("HYDRA_PY_GLOG_INITIALIZED", "1", 1);
-  }
+  google::InitGoogleLogging("hydra_python");
+  google::InstallFailureSignalHandler();
 }
 
 namespace glog_utilities {
@@ -67,16 +58,18 @@ void addBindings(pybind11::module_& m) {
       "override_settings"_a = true);
   m.def(
       "set_glog_dir",
-      [](const std::string& dirname) {
-        GlogSingleton::instance().setLogDirectory(dirname);
+      [](const std::string& dirname, int min_stderr_threshold) {
+        GlogSingleton::instance().setLogDirectory(dirname, min_stderr_threshold);
       },
-      "dirname"_a);
+      "dirname"_a,
+      "min_stderr_threshold"_a = 2);
   m.def(
       "set_glog_dir",
-      [](const std::filesystem::path& dirname) {
-        GlogSingleton::instance().setLogDirectory(dirname);
+      [](const std::filesystem::path& dirname, int min_stderr_threshold) {
+        GlogSingleton::instance().setLogDirectory(dirname, min_stderr_threshold);
       },
-      "dirname"_a);
+      "dirname"_a,
+      "min_stderr_threshold"_a = 2);
 }
 
 }  // namespace glog_utilities

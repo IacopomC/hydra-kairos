@@ -53,6 +53,7 @@ void declare_config(InputModule::Config& config) {
   using namespace config;
   name("InputModule::Config");
   field(config.inputs, "inputs");
+  field(config.max_receiver_queue_size, "max_receiver_queue_size");
   checkCondition(!config.inputs.empty(), "At least one input must be specified");
 }
 
@@ -63,6 +64,10 @@ InputModule::InputModule(const Config& config, const OutputQueue::Ptr& queue)
   for (const auto& [name, input_pair] : config.inputs) {
     receivers_.emplace_back(input_pair.receiver.create(name));
     CHECK(info.setSensor(input_pair.sensor.create(name), false));
+  }
+
+  for (auto& receiver : receivers_) {
+    receiver->queue.max_size = config.max_receiver_queue_size;
   }
 }
 
@@ -93,16 +98,11 @@ void InputModule::stopImpl() {
   }
 }
 
-void InputModule::save(const LogSetup&) {}
-
 std::string InputModule::printInfo() const { return config::toString(config); }
 
 void InputModule::dataSpin() {
-  // Service every receiver in a loop until shutdown, pairing each sensor packet
-  // with the body pose at its timestamp before forwarding it downstream.
   while (!should_shutdown_) {
     for (const auto& receiver : receivers_) {
-      // Non-blocking check so one idle receiver does not stall the others.
       const bool has_data = receiver->queue.poll();
       if (!has_data) {
         continue;
@@ -112,8 +112,6 @@ void InputModule::dataSpin() {
       const auto curr_time = packet->timestamp_ns;
       VLOG(2) << "[Hydra Input] popped input @ " << curr_time << " [ns]";
 
-      // Look up the pose at the sensor timestamp; drop the packet if the pose
-      // source cannot provide one (e.g. not yet available or extrapolated out).
       const auto odom_T_body = getBodyPose(curr_time);
       if (!odom_T_body) {
         LOG(WARNING) << "[Hydra Input] dropping input @ " << curr_time
@@ -121,12 +119,13 @@ void InputModule::dataSpin() {
         continue;
       }
 
-      // Bundle sensor data and the resolved body pose into one packet.
       InputPacket::Ptr input(new InputPacket());
       input->timestamp_ns = curr_time;
       input->sensor_input = packet;
       input->world_t_body = odom_T_body.target_p_source;
       input->world_R_body = odom_T_body.target_R_source;
+      VLOG(5) << "[Hydra Input] output queue state: size=" << queue_->size()
+              << " (max=" << queue_->max_size << ") @ " << curr_time << " [ns]";
       queue_->push(input);
     }
   }

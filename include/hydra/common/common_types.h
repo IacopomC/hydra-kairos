@@ -37,30 +37,13 @@
 #include <cstdint>
 #include <unordered_set>
 
-/**
- * @file common_types.h
- * @brief Lightweight aliases and helpers shared across the pipeline: a set of
- *        node identifiers, a nanosecond timestamp type, and conversions between
- *        nanosecond timestamps and seconds.
- */
-
 namespace hydra {
 
-/// @brief Set of scene-graph node identifiers.
 using NodeIdSet = std::unordered_set<uint64_t>;
-/// @brief Timestamp expressed in nanoseconds.
 using TimeStamp = uint64_t;
 
-/// @brief Convert a nanosecond timestamp to seconds.
-/// @param time Timestamp in nanoseconds.
-/// @return Equivalent value in seconds.
 inline double toSeconds(TimeStamp time) { return static_cast<double>(time) / 1e9; }
 
-/// @brief Convert a time in seconds to a nanosecond timestamp.
-/// @param time Time in seconds.
-/// @return Equivalent timestamp in nanoseconds.
-inline TimeStamp fromSeconds(double time) {
-  return static_cast<TimeStamp>(time * 1e9);
-}
+inline TimeStamp fromSeconds(double time) { return static_cast<TimeStamp>(time * 1e9); }
 
 }  // namespace hydra

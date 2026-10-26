@@ -32,13 +32,6 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
-/**
- * @file registration.h
- * @brief Geometric registration of matched subgraphs. Defines the solver
- *        interface, a robust point-cloud solver over scene-graph node
- *        positions, and templated helpers that build correspondences between
- *        two layers and solve for the relative transform.
- */
 #pragma once
 #include <glog/logging.h>
 #include <gtsam/geometry/Pose3.h>
@@ -53,101 +46,76 @@
 
 namespace hydra::lcd {
 
-/// @brief Parameters governing layer registration and its acceptance criteria.
 struct LayerRegistrationConfig {
-  size_t min_correspondences = 5;          ///< Minimum correspondences required to attempt a solve.
-  size_t min_inliers = 5;                  ///< Minimum inlier correspondences for a valid solution.
-  size_t max_same_nodes = 2;               ///< Maximum nodes shared between query and match before rejecting.
-  bool log_registration_problem = false;   ///< Write each registration problem to disk when true.
-  bool use_pairwise_registration = false;  ///< Form correspondences pairwise rather than by semantic label.
-  std::string registration_output_path = "";  ///< Directory for logged registration problems.
-  bool recreate_subgraph = false;          ///< Rebuild the subgraph at solve time instead of reusing the match.
-  SubgraphConfig subgraph_extraction;      ///< Subgraph settings used when recreating the subgraph.
+  size_t min_correspondences = 5;
+  size_t min_inliers = 5;
+  size_t max_same_nodes = 2;
+  bool log_registration_problem = false;
+  bool use_pairwise_registration = false;
+  std::string registration_output_path = "";
+  bool recreate_subgraph = false;
+  SubgraphConfig subgraph_extraction;
 };
 
-/// @brief Query and match node sets handed to a registration solver.
 struct DsgRegistrationInput {
-  std::set<NodeId> query_nodes;  ///< Nodes of the query subgraph.
-  std::set<NodeId> match_nodes;  ///< Nodes of the matched subgraph.
-  NodeId query_root;             ///< Root of the query subgraph.
-  NodeId match_root;             ///< Root of the matched subgraph.
+  std::set<NodeId> query_nodes;
+  std::set<NodeId> match_nodes;
+  NodeId query_root;
+  NodeId match_root;
 };
 
-/// @brief Interface for solving the relative pose between a matched pair of subgraphs.
 struct DsgRegistrationSolver {
-  using Ptr = std::unique_ptr<DsgRegistrationSolver>;  ///< Owning handle to a solver.
+  using Ptr = std::unique_ptr<DsgRegistrationSolver>;
 
   virtual ~DsgRegistrationSolver() = default;
 
-  /// @brief Solve for the relative pose implied by a candidate match.
-  /// @param dsg Scene graph supplying node positions.
-  /// @param match Query and match node sets.
-  /// @param query_agent_id Agent node the closure is anchored to.
-  /// @return A registration solution, valid only when the solve succeeds.
   virtual RegistrationSolution solve(const DynamicSceneGraph& dsg,
                                      const DsgRegistrationInput& match,
                                      NodeId query_agent_id) const = 0;
 };
 
-using TeaserParams = teaser::RobustRegistrationSolver::Params;  ///< Robust registration solver parameters.
+using TeaserParams = teaser::RobustRegistrationSolver::Params;
 
-/// @brief Registration solver that aligns two subgraphs with a robust
-/// point-cloud solver over their node positions.
 struct DsgTeaserSolver : DsgRegistrationSolver {
-  /// @brief Construct the solver for one layer.
-  /// @param layer_id Layer whose nodes are registered.
-  /// @param config Correspondence and inlier thresholds.
-  /// @param params Robust solver parameters.
-  DsgTeaserSolver(LayerId layer_id,
+  DsgTeaserSolver(const std::string& layer,
                   const LayerRegistrationConfig& config,
                   const TeaserParams& params);
 
   virtual ~DsgTeaserSolver() = default;
 
-  /// @brief Align the matched subgraph to the query subgraph.
-  /// @param dsg Scene graph supplying node positions.
-  /// @param match Query and match node sets.
-  /// @param query_agent_id Agent node the closure is anchored to.
-  /// @return The relative pose solution, valid only on success.
   RegistrationSolution solve(const DynamicSceneGraph& dsg,
                              const DsgRegistrationInput& match,
                              NodeId query_agent_id) const override;
 
-  LayerId layer_id;                ///< Layer this solver registers.
-  LayerRegistrationConfig config;  ///< Correspondence and inlier thresholds.
-  std::string timer_prefix;        ///< Prefix for timing labels.
-  std::string log_prefix;          ///< Prefix for log messages.
-  mutable teaser::RobustRegistrationSolver solver;  ///< Underlying solver; mutable since solving updates its state.
+  const std::string layer_id;
+  LayerRegistrationConfig config;
+  std::string timer_prefix;
+  std::string log_prefix;
+  // registration call mutates the solver
+  mutable teaser::RobustRegistrationSolver solver;
 };
 
-/// @brief Predicate deciding whether two nodes form a valid correspondence.
 using CorrespondenceFunc =
     std::function<bool(const SceneGraphNode&, const SceneGraphNode&)>;
 
-/// @brief Source and destination node sets, layers, and locking for a layer solve.
 template <typename NodeSet = std::list<NodeId>>
 struct LayerRegistrationProblem {
-  mutable NodeSet src_nodes;             ///< Source nodes; pruned in place to drop stale identifiers.
-  mutable NodeSet dest_nodes;            ///< Destination nodes; pruned in place to drop stale identifiers.
-  SceneGraphLayer* dest_layer = nullptr; ///< Destination layer; the source layer is used when null.
-  std::mutex* src_mutex = nullptr;       ///< Optional lock guarding the source layer.
-  std::mutex* dest_mutex = nullptr;      ///< Optional lock guarding the destination layer.
-  size_t min_correspondences;            ///< Minimum correspondences for this problem.
-  size_t min_inliers;                    ///< Minimum inliers for this problem.
+  mutable NodeSet src_nodes;
+  mutable NodeSet dest_nodes;
+  SceneGraphLayer* dest_layer = nullptr;
+  std::mutex* src_mutex = nullptr;
+  std::mutex* dest_mutex = nullptr;
+  size_t min_correspondences;
+  size_t min_inliers;
 };
 
-/// @brief Result of a single-layer registration.
 struct LayerRegistrationSolution {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  bool valid = false;                                  ///< Whether the solve produced a usable transform.
-  gtsam::Pose3 dest_T_src;                             ///< Transform mapping source points into the destination frame.
-  std::vector<std::pair<NodeId, NodeId>> inliers;      ///< Source/destination node pairs accepted as inliers.
+  bool valid = false;
+  gtsam::Pose3 dest_T_src;
+  std::vector<std::pair<NodeId, NodeId>> inliers;
 };
 
-/// @brief Remove identifiers absent from a layer, returning the dropped ones.
-/// @param layer Layer to check membership against.
-/// @param nodes Node set pruned in place.
-/// @return The identifiers that were removed.
 template <typename NodeSet>
 std::list<NodeId> pruneSet(const SceneGraphLayer& layer, NodeSet& nodes) {
   std::list<NodeId> pruned;
@@ -163,14 +131,6 @@ std::list<NodeId> pruneSet(const SceneGraphLayer& layer, NodeSet& nodes) {
   return pruned;
 }
 
-/// @brief Build correspondences between two node sets and solve for their
-/// relative transform with the robust solver.
-/// @param config Correspondence and inlier thresholds.
-/// @param solver Robust solver, reset and run within the call.
-/// @param problem Source and destination node sets, layers, and locks.
-/// @param src Source layer supplying node positions.
-/// @param correspondence_func Predicate deciding which node pairs are correspondences.
-/// @return The solution, invalid when there are too few correspondences or inliers.
 template <typename NodeSet>
 LayerRegistrationSolution registerDsgLayer(
     const LayerRegistrationConfig& config,
@@ -279,12 +239,6 @@ LayerRegistrationSolution registerDsgLayer(
           valid_correspondences};
 }
 
-/// @brief Register two node sets treating every node pair as a correspondence.
-/// @param config Correspondence and inlier thresholds.
-/// @param solver Robust solver, reset and run within the call.
-/// @param problem Source and destination node sets, layers, and locks.
-/// @param src Source layer supplying node positions.
-/// @return The solution from the all-pairs correspondences.
 template <typename NodeSet>
 LayerRegistrationSolution registerDsgLayerPairwise(
     const LayerRegistrationConfig& config,
@@ -295,12 +249,6 @@ LayerRegistrationSolution registerDsgLayerPairwise(
       config, solver, problem, src, [](const auto&, const auto&) { return true; });
 }
 
-/// @brief Register two node sets, pairing nodes only when their semantic labels match.
-/// @param config Correspondence and inlier thresholds.
-/// @param solver Robust solver, reset and run within the call.
-/// @param problem Source and destination node sets, layers, and locks.
-/// @param src Source layer supplying node positions.
-/// @return The solution from the label-consistent correspondences.
 template <typename NodeSet>
 LayerRegistrationSolution registerDsgLayerSemantic(
     const LayerRegistrationConfig& config,

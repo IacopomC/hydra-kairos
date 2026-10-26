@@ -1,12 +1,5 @@
 #pragma once
 
-/**
- * @file input_conversion.h
- * @brief Helpers that turn a raw InputPacket into processed InputData and
- *        normalize the image data: type/format normalization, label/depth/color
- *        conversion, and placing the vertex map in the requested frame.
- */
-
 #include <memory>
 
 #include "hydra/input/input_data.h"
@@ -17,36 +10,40 @@ struct InputPacket;
 
 namespace conversions {
 
-/// @brief Convert an input packet into InputData if possible.
-/// @param input_packet The input packet to convert.
-/// @param vertices_in_world_frame If true, convert the vertex image to the world
-/// frame; otherwise leave it in the sensor frame.
-/// @return The input data on success, nullptr otherwise.
+/**
+ * @brief Convert an input packet to a valid input data format if possible.
+ * @param input_packet The input packet to convert.
+ * @param vertices_in_world_frame If true, convert the vertex image to be in world
+ * frame. Otherwise it will be in sensor frame.
+ * @param normalize_labels Force label normalization
+ * @return The input data if successful, nullptr otherwise.
+ */
 std::unique_ptr<InputData> parseInputPacket(const InputPacket& input_packet,
-                                            const bool vertices_in_world_frame = false);
+                                            bool vertices_in_world_frame = false,
+                                            bool normalize_labels = true);
 
-/// @brief Ensure all images are of the expected type/format.
+/**
+ * @brief make sure that all the images are of the right type
+ */
 bool normalizeData(InputData& data, bool normalize_labels = true);
 
-/// @brief Normalize the depth image to the expected type.
 bool normalizeDepth(InputData& data);
 
-/// @brief Derive a label image from a color image.
 bool colorToLabels(cv::Mat& label_image, const cv::Mat& colors);
 
 // TODO(nathan) check if the conversions are directly used...
-/// @brief Convert the label image to the expected format.
 bool convertLabels(InputData& data);
 
-/// @brief Convert the depth image to the expected format.
 bool convertDepth(InputData& data);
 
-/// @brief Convert the color image to the expected format.
 bool convertColor(InputData& data);
 
-/// @brief Ensure the vertex map is in the requested frame.
-/// @param data The input data to convert.
-/// @param in_world_frame If true, convert to the world frame; otherwise sensor frame.
+/**
+ * @brief Ensure that the vertex map is in the correct frame.
+ * @param data The input data to convert.
+ * @param in_world_frame If true, the vertex map will be converted to world frame.
+ * Otherwise it will be in sensor frame.
+ */
 void convertVertexMap(InputData& data, bool in_world_frame);
 
 }  // namespace conversions

@@ -32,38 +32,22 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
-/**
- * @file subgraph_extraction.h
- * @brief Selects the neighborhood of nodes around a root node that feeds a
- *        descriptor. The neighborhood can be a fixed radius or one grown to
- *        meet a minimum node count between configured bounds.
- */
 #pragma once
 #include "hydra/common/dsg_types.h"
 
 namespace hydra {
 
-/// @brief Settings for choosing the nodes that make up a subgraph around a root.
 struct SubgraphConfig {
-  bool fixed_radius = true;  ///< Use max_radius_m directly when true; otherwise grow toward min_nodes.
-  double max_radius_m;       ///< Largest neighborhood radius considered (m).
-  double min_radius_m;       ///< Smallest neighborhood radius considered (m) when growing.
-  size_t min_nodes;          ///< Target node count when the radius is not fixed.
+  bool fixed_radius = true;
+  double max_radius_m;
+  double min_radius_m;
+  size_t min_nodes;
 
-  /// @brief Construct a fixed-radius configuration.
-  /// @param radius_m Neighborhood radius in meters.
   SubgraphConfig(double radius_m);
 
-  /// @brief Construct with default-initialized fields.
   SubgraphConfig();
 };
 
-/// @brief Collect the nodes within the configured neighborhood of a root node.
-/// @param config Radius and node-count settings.
-/// @param graph Scene graph to read positions and connectivity from.
-/// @param root_node Node at the center of the neighborhood.
-/// @param is_places True when extracting from the places layer, which uses places connectivity.
-/// @return The set of node identifiers forming the subgraph.
 std::set<NodeId> getSubgraphNodes(const SubgraphConfig& config,
                                   const DynamicSceneGraph& graph,
                                   NodeId root_node,

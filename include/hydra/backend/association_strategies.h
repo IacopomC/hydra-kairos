@@ -34,105 +34,69 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file association_strategies.h
- * @brief Concrete association strategies that propose merge candidates for a
- *        node within a scene-graph layer. Each strategy returns the subset of
- *        the layer that should be tested against a given node, ranging from
- *        every other node to spatial nearest-neighbor lookups, optionally
- *        restricted to nodes sharing the same semantic label.
- */
 #include "hydra/backend/merge_proposer.h"
 #include "hydra/utils/nearest_neighbor_utilities.h"
 
 namespace hydra::association {
 
-/// @brief Considers every other node in the layer as a merge candidate.
 struct Pairwise : AssociationStrategy {
   struct Config {};
 
   Pairwise(const Config, const SceneGraphLayer&) {}
   virtual ~Pairwise() = default;
 
-  /// @brief Returns all nodes in the layer as candidates for the given node.
-  /// @param layer Layer holding the candidate nodes.
-  /// @param node Node whose merge candidates are requested.
-  /// @return View over the candidate nodes.
   LayerView candidates(const SceneGraphLayer& layer,
                        const SceneGraphNode& node) const override;
 };
 
-/// @brief Declares the configuration fields for Pairwise.
 void declare_config(Pairwise::Config& config);
 
-/// @brief Considers every other node sharing the node's semantic label.
 struct SemanticPairwise : AssociationStrategy {
   struct Config {};
 
   SemanticPairwise(const Config, const SceneGraphLayer&) {}
   virtual ~SemanticPairwise() = default;
 
-  /// @brief Returns nodes with a matching semantic label as candidates.
-  /// @param layer Layer holding the candidate nodes.
-  /// @param node Node whose merge candidates are requested.
-  /// @return View over the candidate nodes.
   LayerView candidates(const SceneGraphLayer& layer,
                        const SceneGraphNode& node) const override;
 };
 
-/// @brief Declares the configuration fields for SemanticPairwise.
 void declare_config(SemanticPairwise::Config& config);
 
-/// @brief Proposes the spatially nearest nodes as merge candidates.
 struct NearestNode : AssociationStrategy {
   struct Config {
-    size_t num_merges_to_consider = 1;  ///< Number of nearest candidates to return per node.
+    //! Number of merge candidates to find for every node
+    size_t num_merges_to_consider = 1;
   } const config;
 
-  /// @brief Builds a nearest-neighbor index over the layer.
-  /// @param config Strategy configuration.
-  /// @param layer Layer indexed for nearest-neighbor queries.
   NearestNode(const Config& config, const SceneGraphLayer& layer);
 
   virtual ~NearestNode();
 
-  /// @brief Returns the nearest nodes to the given node as candidates.
-  /// @param layer Layer holding the candidate nodes.
-  /// @param node Node whose merge candidates are requested.
-  /// @return View over the nearest candidate nodes.
   LayerView candidates(const SceneGraphLayer& layer,
                        const SceneGraphNode& node) const override;
 
-  NearestNodeFinder::Ptr node_finder;  ///< Spatial index used to answer queries.
+  NearestNodeFinder::Ptr node_finder;
 };
 
-/// @brief Declares the configuration fields for NearestNode.
 void declare_config(NearestNode::Config& config);
 
-/// @brief Proposes the spatially nearest nodes that share a semantic label.
 struct SemanticNearestNode : AssociationStrategy {
   struct Config {
-    size_t num_merges_to_consider = 1;  ///< Number of nearest candidates to return per node.
+    //! Number of merge candidates to find for every node
+    size_t num_merges_to_consider = 1;
   } const config;
 
-  /// @brief Builds a per-label nearest-neighbor index over the layer.
-  /// @param config Strategy configuration.
-  /// @param layer Layer indexed for nearest-neighbor queries.
   SemanticNearestNode(const Config& config, const SceneGraphLayer& layer);
 
   virtual ~SemanticNearestNode();
 
-  /// @brief Returns the nearest same-label nodes as candidates.
-  /// @param layer Layer holding the candidate nodes.
-  /// @param node Node whose merge candidates are requested.
-  /// @return View over the nearest same-label candidate nodes.
   LayerView candidates(const SceneGraphLayer& layer,
                        const SceneGraphNode& node) const override;
 
-  SemanticNodeFinders node_finders;  ///< Per-label spatial indices used to answer queries.
+  SemanticNodeFinders node_finders;
 };
 
-/// @brief Declares the configuration fields for SemanticNearestNode.
 void declare_config(SemanticNearestNode::Config& config);
 
 }  // namespace hydra::association

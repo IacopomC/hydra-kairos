@@ -33,34 +33,20 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-#include "hydra/utils/log_utilities.h"
-
-/**
- * @file module.h
- * @brief Abstract interface for a pipeline module. Defines the lifecycle hooks
- *        (start, stop, save) that the pipeline calls on each module along with
- *        an optional description hook.
- */
+#include "hydra/utils/data_directory.h"
 
 namespace hydra {
 
-/// @brief Base interface for a unit of pipeline work with a managed lifecycle.
+/**
+ * @brief Core class representing a module that does some work
+ */
 class Module {
  public:
   using Ptr = std::shared_ptr<Module>;
-
   virtual ~Module() = default;
-
-  /// @brief Begin the module's work, typically spawning its thread.
   virtual void start() = 0;
-  /// @brief Stop the module and release any running threads.
   virtual void stop() = 0;
-  /// @brief Persist the module's outputs.
-  /// @param setup Logging setup describing where to write.
-  virtual void save(const LogSetup& setup) = 0;
-
-  /// @brief Return a human-readable description of the module.
-  /// @return Description string; empty by default.
+  virtual void save(const DataDirectory& /* output */) {}
   virtual std::string printInfo() const { return ""; }
 };
 

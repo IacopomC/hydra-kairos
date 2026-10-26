@@ -37,25 +37,13 @@
 
 #include "hydra/backend/update_functions.h"
 
-/**
- * @file update_agents_functor.h
- * @brief Update functor for the agents layer. Writes the optimized agent poses
- *        back onto the agent nodes and drops agent nodes whose optimized pose is
- *        no longer present.
- */
-
 namespace hydra {
 
-/// @brief Updates agent-layer nodes from the optimized agent poses.
 struct UpdateAgentsFunctor : public UpdateFunctor {
   struct Config {};
 
-  /// @brief Constructs the functor.
   explicit UpdateAgentsFunctor(const Config& /* config */ = {});
 
-  /// @brief Writes optimized poses onto the agent nodes for this iteration.
-  /// @param dsg Shared graph whose agent nodes are updated.
-  /// @param info Per-iteration context supplying the optimized agent poses.
   void call(const DynamicSceneGraph&,
             SharedDsgInfo& graph,
             const UpdateInfo::ConstPtr& info) const override;
@@ -66,7 +54,6 @@ struct UpdateAgentsFunctor : public UpdateFunctor {
           "UpdateAgentsFunctor");
 };
 
-/// @brief Declares the configuration fields for UpdateAgentsFunctor.
 void declare_config(UpdateAgentsFunctor::Config&);
 
 }  // namespace hydra

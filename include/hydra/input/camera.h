@@ -47,13 +47,6 @@
 // purposes notwithstanding any copyright notation herein.
 #pragma once
 
-/**
- * @file camera.h
- * @brief Pinhole-camera sensor model: projects points through the intrinsics,
- *        builds a vertex map and range image from a depth image, and tests the
- *        view frustum. Specializes the Sensor interface.
- */
-
 #include <vector>
 
 #include "hydra/input/input_data.h"
@@ -61,8 +54,9 @@
 
 namespace hydra {
 
-/// @brief Pinhole RGB-D camera sensor: intrinsics, point projection, and the
-/// depth-to-vertex-map and vertex-map-to-range-image conversions.
+/**
+ * @brief Utility class bundling camera related operations and data.
+ */
 class Camera : public Sensor {
  public:
   // Note: negative parameters are REQUIRED
@@ -85,7 +79,6 @@ class Camera : public Sensor {
 
   virtual ~Camera() = default;
 
-  /// @brief This camera's configuration.
   const Config& getConfig() const { return config_; }
 
   float getPointDepth(const Eigen::Vector3f& p) const override;
@@ -106,12 +99,9 @@ class Camera : public Sensor {
   bool pointIsInViewFrustum(const Eigen::Vector3f& point_C,
                             float inflation_distance = 0.0f) const override;
 
-  /// @brief Back-project a depth image into a per-pixel vertex map, optionally
-  /// transformed into the world frame via @p T_W_C.
   cv::Mat computeVertexMap(const cv::Mat& depth_image,
                            const Eigen::Isometry3f* T_W_C = nullptr) const;
 
-  /// @brief Convert a vertex map into a range image, reporting its min/max range.
   cv::Mat computeRangeImage(const cv::Mat& vertex_map,
                             float* min_range,
                             float* max_range) const;
@@ -121,7 +111,8 @@ class Camera : public Sensor {
  private:
   const Config config_;
 
-  Eigen::Matrix<float, 4, 3> view_frustum_;  ///< Top, right, bottom, left frustum plane normals.
+  // Pre-computed stored values.
+  Eigen::Matrix<float, 4, 3> view_frustum_;  // Top, right, bottom, left plane normals.
 };
 
 void declare_config(Camera::Config& config);

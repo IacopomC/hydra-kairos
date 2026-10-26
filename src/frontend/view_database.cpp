@@ -3,6 +3,7 @@
 #include <config_utilities/config.h>
 #include <config_utilities/factory.h>
 #include <glog/logging.h>
+#include <spark_dsg/printing.h>
 
 #include "hydra/common/pipeline_queues.h"
 #include "hydra/input/input_data.h"
@@ -13,20 +14,26 @@ void declare_config(ViewDatabase::Config& config) {
   using namespace config;
   name("ViewDatabase::Config");
   field(config.view_selection_method, "view_selection_method");
+  field(config.inflation_distance, "inflation_distance");
+  field(config.layers, "layers");
+  field(config.verbosity, "verbosity");
 }
 
 using NodeSet = std::unordered_set<NodeId>;
 
 ViewDatabase::ViewDatabase(const Config& config)
-    : view_selector_(config::create<ViewSelector>(config.view_selection_method)) {
+    : config(config),
+      view_selector_(config::create<ViewSelector>(config.view_selection_method)) {
   CHECK(view_selector_);
+  for (const auto& layer : config.layers) {
+    trackers_.emplace(layer, ActiveWindowTracker());
+  }
 }
 
 ViewDatabase::~ViewDatabase() {}
 
 void ViewDatabase::updateAssignments(const DynamicSceneGraph& graph,
-                                     const NodeSet& active_places) const {
-  // drain any feature views produced since the last call
+                                     const ArchivalCheck& should_archive) const {
   auto& queue = PipelineQueues::instance().input_features_queue;
   size_t new_views = 0;
   while (!queue.empty()) {
@@ -34,29 +41,20 @@ void ViewDatabase::updateAssignments(const DynamicSceneGraph& graph,
     views_.push_back(queue.pop());
   }
 
-  VLOG(2) << "Got " << new_views << " new views!";
-
-  // archive views that no longer see any active place: a view is kept only while at
-  // least one active place still falls inside its frustum
+  // clean up views
   auto iter = views_.begin();
   while (iter != views_.end()) {
     const auto& view = *iter;
     if (!view) {
       iter = views_.erase(iter);
+      LOG_IF(INFO, config.verbosity >= 2) << "Removed empty view!";
       continue;
     }
 
-    bool visible = false;
-    for (const auto node_id : active_places) {
-      // TODO: this isn't the best archival logic ever, we probably want some
-      // sort of occlusion check
-      if (view->pointInView(graph.getNode(node_id).attributes().position)) {
-        visible = true;
-        break;
-      }
-    }
-
-    if (!visible) {
+    const Eigen::Vector3d view_pos = view->sensor_T_world.inverse().translation();
+    if (should_archive(view_pos, view->timestamp_ns)) {
+      LOG_IF(INFO, config.verbosity >= 2)
+          << "Archived view @ " << view->timestamp_ns << " [ns]";
       iter = views_.erase(iter);
       continue;
     }
@@ -64,17 +62,38 @@ void ViewDatabase::updateAssignments(const DynamicSceneGraph& graph,
     ++iter;
   }
 
+  LOG_IF(INFO, config.verbosity >= 1) << "Got " << new_views << " new views!";
   if (views_.empty()) {
-    VLOG(2) << "No views assigned!";
+    LOG_IF(INFO, config.verbosity >= 1) << "No views assigned!";
     return;
   }
 
-  // assign each active place a semantic feature drawn from the surviving views, per the
-  // configured selection policy (closest view, boundary view, or fusion)
-  VLOG(2) << "Assigning features with " << views_.size() << " active view(s)";
-  for (const auto node_id : active_places) {
-    auto& attrs = graph.getNode(node_id).attributes<SemanticNodeAttributes>();
-    view_selector_->selectFeature(views_, attrs);
+  LOG_IF(INFO, config.verbosity >= 1)
+      << "Assigning features with " << views_.size() << " active view(s)";
+  for (auto& [layer_name, layer_tracker] : trackers_) {
+    auto layer = graph.findLayer(layer_name);
+    if (!layer) {
+      LOG(WARNING) << "Skipping unknown layer: '" << layer_name << "'";
+      continue;
+    }
+
+    size_t num_assigned = 0;
+    layer_tracker.clear();
+    const auto layer_view = layer_tracker.view(*layer);
+    for (const auto& node : layer_view) {
+      auto attrs = node.tryAttributes<SemanticNodeAttributes>();
+      if (!attrs) {
+        LOG(ERROR) << "Invalid node " << NodeSymbol(node.id).str()
+                   << " when assigning views!";
+        continue;
+      }
+
+      ++num_assigned;
+      view_selector_->selectFeature(views_, config.inflation_distance, *attrs);
+    }
+
+    LOG_IF(INFO, config.verbosity >= 1) << "Assigned features for " << num_assigned
+                                        << " nodes for layer '" << layer_name << "'";
   }
 }
 

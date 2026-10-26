@@ -35,6 +35,7 @@
 #include "hydra/bindings/python_pipeline.h"
 
 #include <config_utilities/config.h>
+#include <config_utilities/external_registry.h>
 #include <config_utilities/parsing/yaml.h>
 #include <config_utilities/printing.h>
 #include <config_utilities/validation.h>
@@ -47,14 +48,13 @@
 #include <hydra/common/pipeline_queues.h>
 #include <hydra/frontend/graph_builder.h>
 #include <hydra/input/camera.h>
-#include <hydra/loop_closure/bow_agent_solver.h>
-#include <hydra/loop_closure/loop_closure_config.h>
 #include <hydra/loop_closure/loop_closure_module.h>
-#include <pose_graph_tools/bow_query.h>
 #include <pybind11/eigen.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl/filesystem.h>
 #include <pybind11/stl_bind.h>
+
+#include <filesystem>
 
 #include "hydra/bindings/glog_utilities.h"
 #include "hydra/bindings/python_image.h"
@@ -63,6 +63,73 @@
 
 namespace hydra::python {
 
+struct ExternalPluginConfig {
+  bool allow = true;
+  bool verbose = false;
+  bool trace_allocations = false;
+  std::vector<std::string> paths;
+};
+
+void declare_config(ExternalPluginConfig& config) {
+  using namespace config;
+  name("ExternalPluginConfig");
+  field(config.allow, "allow");
+  field(config.verbose, "verbose");
+  field(config.trace_allocations, "trace_allocations");
+  field(config.paths, "paths");
+}
+
+class PythonPipeline : public HydraPipeline {
+ public:
+  struct Config : PipelineConfig {
+    config::VirtualConfig<ActiveWindowModule> active_window{
+        ReconstructionModule::Config()};
+    config::VirtualConfig<GraphBuilder> frontend{GraphBuilder::Config()};
+    config::VirtualConfig<BackendModule> backend{BackendModule::Config()};
+    //! Loop closure settings, read from the top level (used when enable_lcd is set)
+    LoopClosureConfig loop_closure;
+    //! Additional modules, e.g., from external libraries loaded with init_plugins
+    ModuleConfigs modules;
+  } const config;
+
+  PythonPipeline(const Config& config,
+                 const Sensor::Ptr& sensor,
+                 int robot_id = 0,
+                 int config_verbosity = 0,
+                 bool step_mode_only = true,
+                 std::string zmq_url = "");
+
+  virtual ~PythonPipeline();
+
+  void start() override;
+
+  void stop() override;
+
+  void reset();
+
+  bool step(const InputPacket::Ptr& input);
+
+  DynamicSceneGraph::Ptr getSceneGraph() const;
+
+  const std::string sensor_name;
+  const std::string zmq_url;
+
+ protected:
+  bool step_mode_only_;
+  std::shared_ptr<ActiveWindowModule> active_window_;
+  std::shared_ptr<GraphBuilder> frontend_;
+  std::shared_ptr<BackendModule> backend_;
+  std::shared_ptr<LoopClosureModule> loop_closure_;
+
+  DynamicSceneGraph::Ptr graph_;
+
+ private:
+  void initModules();
+
+  //! Whether step() drives the module (all other modules run in the background)
+  static bool isStepped(const std::string& name);
+};
+
 void declare_config(PythonPipeline::Config& config) {
   using namespace config;
   name("PythonPipeline::Config");
@@ -70,20 +137,17 @@ void declare_config(PythonPipeline::Config& config) {
   field(config.active_window, "active_window");
   field(config.frontend, "frontend");
   field(config.backend, "backend");
-  // Inline so LoopClosureConfig's top-level fields and its nested `lcd:`
-  // detector subblock parse from the same root as the rest of the pipeline
-  // config (matches how `logs`/`frames` are merged in PipelineConfig).
   field(config.loop_closure, "loop_closure", false);
+  field(config.modules, "modules");
 }
 
 PythonPipeline::PythonPipeline(const Config& _config,
                                const Sensor::Ptr& sensor,
                                int robot_id,
                                int config_verbosity,
-                               bool freeze_global_info,
                                bool step_mode_only,
                                std::string zmq_url)
-    : HydraPipeline(_config, robot_id, config_verbosity, freeze_global_info),
+    : HydraPipeline(_config, robot_id, config_verbosity),
       config(_config),
       sensor_name(sensor ? sensor->name : ""),
       zmq_url(zmq_url),
@@ -92,44 +156,41 @@ PythonPipeline::PythonPipeline(const Config& _config,
     throw std::runtime_error("Invalid sensor!");
   }
 
-  GlogSingleton::instance().setLogLevel(0, 0, false);
-  config::Settings().print_width = 100;
-  config::Settings().print_indent = 45;
-
   GlobalInfo::instance().setSensor(sensor);
-  VLOG(config_verbosity) << "\n"
-                         << config::toString(GlobalInfo::instance().getConfig());
-
+  VLOG(config_verbosity) << "Using sensor '" << sensor->name << "':\n"
+                         << sensor->dump();
   initModules();
-
-  // In step mode, callers that don't explicitly call start() still need the
-  // worker-owning modules (loop_closure, and any subclass extras) running.
-  if (step_mode_only_) {
-    startWorkers();
-  }
 }
 
 PythonPipeline::~PythonPipeline() { stop(); }
 
+bool PythonPipeline::isStepped(const std::string& name) {
+  return name == "reconstruction" || name == "frontend" || name == "backend";
+}
+
 void PythonPipeline::start() {
-  if (step_mode_only_) {
-    LOG(INFO) << "[Hydra Python] Running in step mode!";
-    startWorkers();
-  } else {
+  if (!step_mode_only_) {
     LOG(INFO) << "[Hydra Python] Running in parallel";
     HydraPipeline::start();
+    return;
+  }
+
+  LOG(INFO) << "[Hydra Python] Running in step mode!";
+  for (auto&& [name, mod] : modules_) {
+    if (mod && !isStepped(name)) {
+      mod->start();
+    }
   }
 }
 
 void PythonPipeline::initModules() {
-  const auto& logs = GlobalInfo::instance().getLogs();
-  frontend_ = config.frontend.create(frontend_dsg_, shared_state_, logs);
+  frontend_ = config.frontend.create(frontend_dsg_, shared_state_);
   if (!frontend_) {
     throw std::runtime_error("Invalid frontend config!");
   }
 
   modules_["frontend"] = frontend_;
-  backend_ = config.backend.create(backend_dsg_, shared_state_, logs);
+  backend_ = config.backend.create(backend_dsg_, shared_state_);
   modules_["backend"] = backend_;
   active_window_ = config.active_window.create(frontend_->queue());
   modules_["reconstruction"] = active_window_;
@@ -139,60 +200,29 @@ void PythonPipeline::initModules() {
     backend_->addSink(std::make_shared<ZmqSink>(zmq_config));
   }
 
-  if (GlobalInfo::instance().getConfig().enable_lcd) {
+  if (config.enable_lcd) {
     auto lcd_config = config.loop_closure;
-    lcd_config.detector.num_semantic_classes =
-        GlobalInfo::instance().getTotalLabels();
-    VLOG(1) << "Number of classes for LCD: "
-            << lcd_config.detector.num_semantic_classes;
-    config::checkValid(lcd_config);
-
-    loop_closure_ = std::make_shared<LoopClosureModule>(lcd_config, shared_state_);
+    lcd_config.detector.num_semantic_classes = GlobalInfo::instance().getTotalLabels();
+    loop_closure_ = std::make_shared<LoopClosureModule>(
+        config::checkValid(lcd_config), shared_state_);
     modules_["lcd"] = loop_closure_;
-
-    if (lcd_config.detector.enable_agent_registration) {
-      loop_closure_->getDetector().setRegistrationSolver(
-          0, std::make_unique<lcd::BowAgentSolver>(lcd_config.bow_agent));
-    }
   }
 
-  // Subclass hook (KAIROS): create + wire extra modules (e.g. the flow
-  // temporal module) against active_window_/backend_ before they spin up.
-  initExtraModules();
-
+  addModules(config.modules);
   showModules();
-  VLOG(config_verbosity_) << GlobalInfo::instance();
-}
-
-void PythonPipeline::startWorkers() {
-  if (workers_started_) {
-    return;
-  }
-  startExtraWorkers();
-  if (loop_closure_) {
-    loop_closure_->start();
-  }
-  workers_started_ = true;
-}
-
-void PythonPipeline::stopWorkers() {
-  if (!workers_started_) {
-    return;
-  }
-  stopExtraWorkers();
-  if (loop_closure_) {
-    loop_closure_->stop();
-  }
-  workers_started_ = false;
 }
 
 void PythonPipeline::stop() {
-  if (step_mode_only_) {
-    stopWorkers();
+  if (!step_mode_only_) {
+    HydraPipeline::stop();
     return;
   }
 
-  HydraPipeline::stop();
+  for (auto&& [name, mod] : modules_) {
+    if (mod && !isStepped(name)) {
+      mod->stop();
+    }
+  }
 }
 
 void PythonPipeline::reset() {
@@ -203,10 +233,9 @@ void PythonPipeline::reset() {
   frontend_.reset();
   backend_.reset();
   loop_closure_.reset();
-  resetExtraModules();
 
-  // reset any other modules (will actually deconstruct specific module
-  // instances given shared_ptr usage)
+  // reset any other modules (will actually deconstruct specific module instances given
+  // shared_ptr usage)
   modules_.clear();
 
   // reset state
@@ -222,17 +251,7 @@ void PythonPipeline::reset() {
   PipelineQueues::instance().clear();
 
   initModules();
-
-  if (!step_mode_only_) {
-    start();
-  } else {
-    startWorkers();
-  }
-}
-
-void PythonPipeline::save() {
-  HydraPipeline::save();
-  GlobalInfo::exit();
+  start();
 }
 
 bool PythonPipeline::step(const InputPacket::Ptr& input) {
@@ -258,7 +277,44 @@ namespace python_pipeline {
 using namespace pybind11::literals;
 namespace py = pybind11;
 
+struct PluginManager {
+  static void init(const ExternalPluginConfig& config) {
+    auto& manager = instance();
+    config::Settings().external_libraries.enabled = config.allow;
+    config::Settings().external_libraries.verbose_load = config.verbose;
+    config::Settings().external_libraries.log_allocation = config.trace_allocations;
+    manager.plugins_ = config::loadExternalFactories(config.paths);
+  }
+
+  static void deinit() {
+    auto& manager = instance();
+    // TODO(nathan) will likely segfault
+    manager.plugins_.unload();
+  }
+
+ private:
+  static PluginManager& instance() {
+    static PluginManager s_instance;
+    return s_instance;
+  }
+
+  config::internal::LibraryGuard plugins_;
+};
+
 void addBindings(pybind11::module_& m) {
+  py::class_<ExternalPluginConfig>(m, "ExternalPluginConfig")
+      .def(py::init<>())
+      .def_readwrite("allow", &ExternalPluginConfig::allow)
+      .def_readwrite("verbose", &ExternalPluginConfig::allow)
+      .def_readwrite("trace_allocations", &ExternalPluginConfig::allow)
+      .def_readwrite("paths", &ExternalPluginConfig::paths)
+      .def("__repr__",
+           [](const ExternalPluginConfig& config) { return config::toString(config); });
+
+  m.def("init_plugins",
+        [](const ExternalPluginConfig& config) { PluginManager::init(config); });
+  m.def("deinit_plugins", []() { PluginManager::deinit(); });
+
   py::class_<PythonPipeline>(m, "HydraPipeline")
       .def_static(
           "from_config",
@@ -266,7 +322,6 @@ void addBindings(pybind11::module_& m) {
              const Sensor::Ptr& sensor,
              int robot_id,
              int config_verbosity,
-             bool freeze_global_info,
              bool step_mode_only,
              const std::string zmq_url) {
             const auto node = YAML::Load(contents);
@@ -275,7 +330,6 @@ void addBindings(pybind11::module_& m) {
                 sensor,
                 robot_id,
                 config_verbosity,
-                freeze_global_info,
                 step_mode_only,
                 zmq_url);
           },
@@ -283,7 +337,6 @@ void addBindings(pybind11::module_& m) {
           "camera"_a,
           "robot_id"_a = 0,
           "config_verbosity"_a = 0,
-          "freeze_global_info"_a = true,
           "use_step_mode"_a = true,
           "zmq_url"_a = "")
       .def_static(
@@ -292,7 +345,6 @@ void addBindings(pybind11::module_& m) {
              const Sensor::Ptr& sensor,
              int robot_id,
              int config_verbosity,
-             bool freeze_global_info,
              bool step_mode_only,
              const std::string& zmq_url) {
             const auto node = YAML::LoadFile(filepath);
@@ -301,7 +353,6 @@ void addBindings(pybind11::module_& m) {
                 sensor,
                 robot_id,
                 config_verbosity,
-                freeze_global_info,
                 step_mode_only,
                 zmq_url);
           },
@@ -309,7 +360,6 @@ void addBindings(pybind11::module_& m) {
           "camera"_a,
           "robot_id"_a = 0,
           "config_verbosity"_a = 0,
-          "freeze_global_info"_a = true,
           "use_step_mode"_a = true,
           "zmq_url"_a = "")
       .def_static("default_config",
@@ -318,7 +368,21 @@ void addBindings(pybind11::module_& m) {
                     ss << config::toYaml(PythonPipeline::Config());
                     return ss.str();
                   })
-      .def("save", &PythonPipeline::save)
+      .def(
+          "save",
+          [](const PythonPipeline& pipeline, const std::filesystem::path& output) {
+            pipeline.save(DataDirectory(output));
+          },
+          "output"_a)
+      .def(
+          "save_graph",
+          [](PythonPipeline& pipeline, const std::string& path, bool include_mesh) {
+            pipeline.getSceneGraph()->save(path, include_mesh);
+          },
+          "path"_a,
+          "include_mesh"_a = true)
+      .def("start", &PythonPipeline::start)
+      .def("stop", &PythonPipeline::stop)
       .def("reset", &PythonPipeline::reset)
       .def(
           "step",
@@ -374,40 +438,9 @@ void addBindings(pybind11::module_& m) {
           "labels"_a,
           "colors"_a,
           "feature"_a = FeatureVector())
-      .def("start", &PythonPipeline::start)
-      .def("stop", &PythonPipeline::stop)
       .def_property_readonly("graph", &PythonPipeline::getSceneGraph);
-
-  // Producer hook for offline DBoW: pushes a BowQuery onto bow_queue so the
-  // frontend's assignBowVectors can stamp dbow_ids/dbow_values onto agent
-  // attributes. The queue is allocated only when
-  // GraphBuilder::Config::lcd_use_bow_vectors is true; this throws otherwise
-  // to fail loudly instead of silently dropping the message.
-  m.def(
-      "push_bow_query",
-      [](uint32_t robot_id,
-         uint32_t pose_id,
-         const std::vector<uint32_t>& word_ids,
-         const std::vector<float>& word_values) {
-        auto& queue = PipelineQueues::instance().bow_queue;
-        if (!queue) {
-          throw std::runtime_error(
-              "bow_queue not allocated; set frontend.lcd_use_bow_vectors: true "
-              "and ensure the pipeline is constructed before push_bow_query");
-        }
-        auto msg = std::make_shared<pose_graph_tools::BowQuery>();
-        msg->robot_id = robot_id;
-        msg->pose_id = pose_id;
-        msg->bow_vector.word_ids = word_ids;
-        msg->bow_vector.word_values = word_values;
-        queue->push(msg);
-      },
-      "robot_id"_a,
-      "pose_id"_a,
-      "word_ids"_a,
-      "word_values"_a);
 }
 
 }  // namespace python_pipeline
 
-}  // namespace hydra::python
+};  // namespace hydra::python

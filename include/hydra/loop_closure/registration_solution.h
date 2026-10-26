@@ -32,12 +32,6 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
-/**
- * @file registration_solution.h
- * @brief Result of a loop-closure registration: the relative pose between two
- *        agent frames along with the hierarchy level and validity that the
- *        solver assigned to it.
- */
 #pragma once
 #include <Eigen/Geometry>
 #include <cstdint>
@@ -46,20 +40,23 @@
 
 namespace hydra::lcd {
 
-/// @brief Relative-pose measurement linking a "from" agent frame to a "to"
-/// agent frame, produced by a registration solver and consumed by the backend.
 struct RegistrationSolution {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  bool valid = false;                            ///< Whether the solution holds a usable measurement.
-  NodeId from_node;                              ///< Agent node defining the "from" frame.
-  NodeId to_node;                                ///< Agent node defining the "to" frame.
-  Eigen::Vector3d to_p_from;                     ///< Translation component of the to_T_from transform.
-  Eigen::Quaterniond to_R_from;                  ///< Rotation component of the to_T_from transform.
-  int64_t level;                                 ///< Hierarchy level the match was found at.
-  std::optional<double> variance = std::nullopt; ///< Optional measurement variance.
+  //! Whether or not the solution is valid
+  bool valid = false;
+  //! Agent node correponding to the "from" frame
+  NodeId from_node;
+  //! Agent node correponding to the "to" frame
+  NodeId to_node;
+  //! position component of to_T_from
+  Eigen::Vector3d to_p_from;
+  //! rotation component of to_T_from
+  Eigen::Quaterniond to_R_from;
+  //! Level of hierarchy the solution is from
+  int64_t level;
+  //! Optional variance of solution
+  std::optional<double> variance = std::nullopt;
 
-  /// @brief Compose the stored translation and rotation into a transform.
-  /// @return The to_T_from isometry mapping the "from" frame into the "to" frame.
   inline Eigen::Isometry3d to_T_from() const {
     return Eigen::Translation3d(to_p_from) * to_R_from;
   }

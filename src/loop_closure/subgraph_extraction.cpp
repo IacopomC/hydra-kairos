@@ -49,24 +49,21 @@ void getObjectsWithinRadius(const DynamicSceneGraph& graph,
                             NodeId parent,
                             double radius_m,
                             std::set<NodeId>& found) {
-  // Walk the places graph outward from the root place. The BFS only steps to a
-  // neighbor place if that place is itself within radius (or has an object
-  // child within radius), so the traversal stays connected and bounded.
   std::deque<NodeId> frontier{parent};
   std::unordered_set<NodeId> visited{parent};
   graph_utilities::breadthFirstSearch(
       graph.getLayer(DsgLayers::PLACES),
       frontier,
       visited,
-      // expansion predicate: keep walking through this place if it or one of
-      // its (non-agent) object children falls inside the radius
       [&](const auto& node) {
-        for (const auto& child : node.children()) {
-          if (graph.isDynamic(child)) {
+        for (const auto& child_id : node.children()) {
+          const auto& child = graph.getNode(child_id);
+          if (child.layer.partition) {
+            // object nodes are in the primary partition
             continue;
           }
 
-          if ((origin - graph.getPosition(child)).norm() < radius_m) {
+          if ((origin - child.attributes().position).norm() < radius_m) {
             return true;
           }
         }
@@ -74,19 +71,17 @@ void getObjectsWithinRadius(const DynamicSceneGraph& graph,
         return (origin - node.attributes().position).norm() < radius_m;
       },
       [](const auto&) { return true; },
-      // visitor: collect the object children of each visited place that lie
-      // inside the radius (the subgraph is the set of nearby objects)
       [&](const SceneGraphLayer&, NodeId node) {
-        for (const auto& child : graph.getNode(node).children()) {
-          if (graph.isDynamic(child)) {
+        for (const auto& child_id : graph.getNode(node).children()) {
+          const auto& child = graph.getNode(child_id);
+          if (child.layer.partition) {
+            // object nodes are in the primary partition
             continue;
           }
 
-          if ((origin - graph.getPosition(child)).norm() >= radius_m) {
-            continue;
+          if ((origin - child.attributes().position).norm() < radius_m) {
+            found.insert(child_id);
           }
-
-          found.insert(child);
         }
       });
 }
@@ -113,8 +108,6 @@ std::set<NodeId> getFilteredNodeSet(const SubgraphConfig& config,
                                     const DynamicSceneGraph& graph,
                                     const Eigen::Vector3d& origin,
                                     const std::set<NodeId>& found) {
-  // Sort candidates by distance from the origin so we can grow the set
-  // outward, taking the closest nodes first.
   std::vector<std::pair<double, NodeId>> candidates;
   for (const auto node : found) {
     const double distance_m = (graph.getPosition(node) - origin).norm();
@@ -162,7 +155,7 @@ std::set<NodeId> getSubgraphNodes(const SubgraphConfig& config,
   try {
     origin = graph.getPosition(root_node);
   } catch (const std::out_of_range& e) {
-    LOG(ERROR) << "Invalid root node " << NodeSymbol(root_node).getLabel() << ": "
+    LOG(ERROR) << "Invalid root node " << NodeSymbol(root_node).str() << ": "
                << e.what();
     return {};
   }

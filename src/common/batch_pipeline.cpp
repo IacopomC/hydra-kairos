@@ -49,7 +49,7 @@ using VFConfig = config::VirtualConfig<GraphBuilder>;
 using RFConfig = RoomFinderConfig;
 
 BatchPipeline::BatchPipeline(const PipelineConfig& config, int robot_id) {
-  GlobalInfo::init(config, robot_id, true);
+  GlobalInfo::init(config, robot_id);
 }
 
 BatchPipeline::~BatchPipeline() {}
@@ -57,39 +57,30 @@ BatchPipeline::~BatchPipeline() {}
 DynamicSceneGraph::Ptr BatchPipeline::construct(const VFConfig& frontend_config,
                                                 VolumetricMap& map,
                                                 const RFConfig* room_config) const {
-  // the frontend builds the graph from a semantic map; without semantics there is
-  // nothing to construct
   if (!map.hasSemantics()) {
     return nullptr;
   }
 
-  // reconstruct the mesh from the volumetric map up front so the frontend has surfaces
-  // to extract objects and places from
   MeshIntegratorConfig mesh_config;
   MeshIntegrator integrator(mesh_config);
   integrator.generateMesh(map, false, false);
 
-  // stand up a one-shot frontend over a fresh shared graph
   auto dsg = GlobalInfo::instance().createSharedDsg();
   auto graph = dsg->graph->clone();
   auto state = std::make_shared<SharedModuleState>();
-  auto module = frontend_config.create(dsg, state, LogSetup::Ptr());
+  auto frontend = frontend_config.create(dsg, state);
 
-  // TODO: this is a little sketchy given the lack of pose info
-  // feed the whole map through as a single active-window output and run one frontend
-  // pass synchronously rather than spinning a thread
+  // TODO(nathan) this is a little sketchy given the lack of pose info
   auto msg = std::make_shared<ActiveWindowOutput>();
   msg->setMap(map);
-  module->queue()->push(msg);
+  frontend->queue()->push(msg);
 
-  if (!module->spinOnce()) {
+  if (!frontend->spinOnce()) {
     return nullptr;
   }
 
-  // optionally derive the room and building layers via the backend update functors,
-  // operating on the clone taken before the frontend ran
   if (room_config) {
-    // TODO: unmerged graph is annoying
+    // TODO(nathan) unmerged graph is annoying
     UpdateRoomsFunctor functor(UpdateRoomsFunctor::Config{*room_config});
     UpdateInfo::ConstPtr info(new UpdateInfo);
     functor.call(*graph, *dsg, info);

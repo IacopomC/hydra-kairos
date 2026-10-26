@@ -59,7 +59,7 @@ void PlaceEvaluator::computeGroundTruth(const GvdIntegratorConfig& config) {
   config_ = config;
 
   VLOG(1) << "using GVD config:" << std::endl << config_;
-  places::GvdIntegrator integrator(config_, gvd_, nullptr);
+  places::GvdIntegrator integrator(config_, gvd_);
   auto map = VolumetricMap::fromTsdf(*tsdf_, 0.3, false);
   CHECK(map) << "Invalid map!";
   integrator.updateFromTsdf(0, map->getTsdfLayer(), false, true);
@@ -83,7 +83,8 @@ PlaceEvaluator::Ptr PlaceEvaluator::fromFile(const std::string& config_filepath,
   return std::make_unique<PlaceEvaluator>(config, tsdf);
 }
 
-PlaceMetrics PlaceEvaluator::eval(const std::string& graph_filepath, uint8_t min_basis) const {
+PlaceMetrics PlaceEvaluator::eval(const std::string& graph_filepath,
+                                  uint8_t min_basis) const {
   const auto graph = DynamicSceneGraph::load(graph_filepath);
   if (!graph->hasLayer(DsgLayers::PLACES)) {
     LOG(ERROR) << "Graph file: " << graph_filepath << " does not have places";

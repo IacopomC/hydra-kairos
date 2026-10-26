@@ -39,17 +39,19 @@ namespace hydra::utils {
 void getPlace2dAndNeighors(const SceneGraphLayer& places_layer,
                            std::vector<std::pair<NodeId, Place2d>>& place_2ds,
                            std::map<NodeId, std::set<NodeId>>& node_neighbors) {
-  // Collect only the places flagged as freshly merged, packaging each one's
-  // mesh indices and current neighbors for the split/update pass that follows.
-  for (auto& id_node_pair : places_layer.nodes()) {
-    auto& attrs = id_node_pair.second->attributes<Place2dNodeAttributes>();
-    if (attrs.need_finish_merge) {
+  for (auto& [node_id, node] : places_layer.nodes()) {
+    auto attrs = node->tryAttributes<Place2dNodeAttributes>();
+    if (!attrs) {
+      continue;
+    }
+
+    if (attrs->need_finish_merge) {
       Place2d p;
       p.indices.insert(p.indices.end(),
-                       attrs.pcl_mesh_connections.begin(),
-                       attrs.pcl_mesh_connections.end());
-      place_2ds.push_back(std::pair(id_node_pair.first, p));
-      node_neighbors.insert({id_node_pair.first, id_node_pair.second->siblings()});
+                       attrs->pcl_mesh_connections.begin(),
+                       attrs->pcl_mesh_connections.end());
+      place_2ds.push_back(std::pair(node_id, p));
+      node_neighbors.insert({node_id, node->siblings()});
     }
   }
 }
@@ -84,9 +86,6 @@ void getNecessaryUpdates(
   for (auto& id_place_pair : place_2ds) {
     addRectInfo(mesh.points, connection_ellipse_scale_factor, id_place_pair.second);
 
-    // A merged place that is both large enough and elongated past the cut-plane
-    // threshold gets decomposed into several smaller places; otherwise it is
-    // just finalized in place.
     if (id_place_pair.second.indices.size() > min_points &&
         id_place_pair.second.cut_plane.norm() > min_size) {
       std::vector<Place2d> split_places =
@@ -195,7 +194,6 @@ NodeSymbol insertNewNodes(
       attrs->is_active = false;
 
       attrs->semantic_label = attrs_og.semantic_label;
-      attrs->name = NodeSymbol(node_id_for_place).getLabel();
       attrs->boundary = place.boundary;
       attrs->pcl_boundary_connections.insert(attrs->pcl_boundary_connections.begin(),
                                              place.boundary_indices.begin(),
@@ -219,8 +217,6 @@ NodeSymbol insertNewNodes(
       graph.emplaceNode(DsgLayers::MESH_PLACES, node_id_for_place, std::move(attrs));
       new_id_map.insert({std::make_tuple(og_ix, split_ix), node_id_for_place});
 
-      // Inherit edges from the original node: connect each split piece to any
-      // sibling of the original it overlaps with.
       auto& attrs_added =
           graph.getNode(node_id_for_place).attributes<Place2dNodeAttributes>();
       // Check for connections between this place and the original place's siblings
@@ -247,7 +243,6 @@ NodeSymbol insertNewNodes(
       ++split_ix;
     }
 
-    // The original (now-split) node is replaced by its pieces.
     ++og_ix;
     graph.removeNode(id_places_pair.first);
   }
@@ -287,9 +282,6 @@ void addNewNodeEdges(
 void reallocateMeshPoints(const std::vector<Place2d::PointT>& points,
                           Place2dNodeAttributes& attrs1,
                           Place2dNodeAttributes& attrs2) {
-  // Re-split the two places' combined mesh points across the perpendicular
-  // bisector of the line joining their centroids: points on each side go to
-  // the nearer place. This redistributes vertices when neighbors shift.
   Eigen::Vector2d delta = attrs2.position.head(2) - attrs1.position.head(2);
   Eigen::Vector2d d = attrs1.position.head(2) + delta / 2;
 

@@ -79,8 +79,6 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
                                         const EdgeWeightFunc& edge_weight_func,
                                         size_t max_iters,
                                         double gamma) {
-  // precompute each node's weighted degree and its weighted neighbor map; these are the
-  // quantities the modularity gain uses, so caching them avoids re-querying edges
   std::map<NodeId, double> degrees;
   std::map<NodeId, std::map<NodeId, double>> neighbors;
   for (const auto& id_node_pair : layer.nodes()) {
@@ -99,8 +97,6 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
 
   const double m = layer.numEdges();
 
-  // seed communities from the initial clusters: each cluster becomes a fixed community,
-  // and its members get that label plus contribute to the community's total degree
   std::map<size_t, double> community_degrees;
   std::map<NodeId, size_t> labels;
   for (size_t i = 0; i < initial_clusters.size(); ++i) {
@@ -113,7 +109,6 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
     community_degrees[i] = total_degree;
   }
 
-  // everything not in a seed cluster is unlabeled and must be assigned to a community
   std::set<NodeId> unlabeled_nodes;
   for (const auto& id_node_pair : layer.nodes()) {
     if (labels.count(id_node_pair.first)) {
@@ -123,13 +118,10 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
     unlabeled_nodes.insert(id_node_pair.first);
   }
 
-  // iteratively reassign unlabeled nodes to the community that maximizes modularity gain
-  // until a full pass makes no changes (converged) or the iteration cap is hit
   size_t iter;
   for (iter = 0; iter < max_iters; ++iter) {
     size_t num_changes = 0;
     for (const auto& node : unlabeled_nodes) {
-      // accumulate the total edge weight from this node into each neighboring community
       std::map<size_t, double> community_weights;
       for (const auto id_weight_pair : neighbors.at(node)) {
         if (!labels.count(id_weight_pair.first)) {
@@ -144,15 +136,11 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
         community_weights[community] += id_weight_pair.second;
       }
 
-      // temporarily remove the node from its current community's degree total so the
-      // gain comparison below does not count the node against itself
       const double node_degree = degrees.at(node);
       if (labels.count(node)) {
         community_degrees[labels.at(node)] -= node_degree;
       }
 
-      // modularity gain of joining a community: edge attraction (2 * shared weight)
-      // minus the gamma-scaled expected weight under the degree null model
       double best_gain = 0.0;
       size_t best_community = initial_clusters.size();
       for (const auto& id_weight_pair : community_weights) {
@@ -169,8 +157,6 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
         continue;  // we couldn't pick a community
       }
 
-      // commit the node's degree to the chosen community (even if unchanged, to undo
-      // the temporary removal above)
       community_degrees[best_community] += node_degree;
 
       if (labels.count(node) && labels.at(node) == best_community) {
@@ -182,7 +168,7 @@ ClusterResults clusterGraphByModularity(const SceneGraphLayer& layer,
     }
 
     if (!num_changes) {
-      break;  // converged: no node moved this pass
+      break;
     }
   }
 
@@ -216,8 +202,7 @@ ClusterResults clusterGraphByNeighbors(const SceneGraphLayer& layer,
     }
   }
 
-  // seed the frontier with every unlabeled node adjacent to a labeled (room) node;
-  // EdgeInfo orders the priority queue by edge weight so the strongest links pop first
+  // populate frontier from all room boundaries
   std::priority_queue<EdgeInfo> frontier;
   for (auto&& [id, node] : layer.nodes()) {
     if (labels.count(id)) {
@@ -234,14 +219,11 @@ ClusterResults clusterGraphByNeighbors(const SceneGraphLayer& layer,
     }
   }
 
-  // flood-fill outward: each popped node claims the label of the strongest edge that
-  // reached it, then offers its still-unlabeled neighbors to the frontier
   while (!frontier.empty()) {
     const auto candidate = frontier.top();
     frontier.pop();
 
     if (labels.count(candidate.id)) {
-      // a stronger edge already labeled this node; skip the weaker candidate
       continue;
     }
 

@@ -49,6 +49,8 @@ void declare_config(UpdateRoomsFunctor::Config& config) {
   using namespace config;
   name("UpdateRoomsFunctor::Config");
   field(config.room_finder, "room_finder");
+  field(config.places_layer, "places_layer");
+  field(config.child_layer, "child_layer");
 }
 
 UpdateRoomsFunctor::UpdateRoomsFunctor(const Config& config)
@@ -57,8 +59,6 @@ UpdateRoomsFunctor::UpdateRoomsFunctor(const Config& config)
 
 void UpdateRoomsFunctor::rewriteRooms(const SceneGraphLayer* new_rooms,
                                       DynamicSceneGraph& graph) const {
-  // Room detection runs from scratch each pass, so clear the existing room
-  // layer entirely before inserting the freshly detected rooms.
   std::vector<NodeId> to_remove;
   const auto& prev_rooms = graph.getLayer(DsgLayers::ROOMS);
   for (const auto& id_node_pair : prev_rooms.nodes()) {
@@ -73,7 +73,6 @@ void UpdateRoomsFunctor::rewriteRooms(const SceneGraphLayer* new_rooms,
     return;
   }
 
-  // Copy the detected room nodes and the edges between them into the graph.
   for (auto&& [id, node] : new_rooms->nodes()) {
     graph.emplaceNode(DsgLayers::ROOMS, id, node->attributes().clone());
   }
@@ -91,26 +90,28 @@ void UpdateRoomsFunctor::call(const DynamicSceneGraph&,
     return;
   }
 
-  ScopedTimer timer("backend/room_detection", info->timestamp_ns, true, 1, false);
-  // Cluster rooms over a copy of just the real ('p') place nodes.
-  auto places_clone =
-      dsg.graph->getLayer(DsgLayers::PLACES).clone([](const auto& node) {
-        return NodeSymbol(node.id).category() == 'p';
-      });
+  const auto places_layer = dsg.graph->findLayer(config.places_layer);
+  if (!places_layer) {
+    return;
+  }
 
-  // TODO: pass in timestamp?
+  ScopedTimer timer("backend/room_detection", info->timestamp_ns, true, 1, false);
+  auto places_clone = places_layer->clone(
+      [](const auto& node) { return NodeSymbol(node.id).category() == 'p'; });
+
+  // TODO(nathan) layer view
+  // TODO(nathan) pass in timestamp?
   auto rooms = room_finder->findRooms(*places_clone);
   rewriteRooms(rooms.get(), *dsg.graph);
-  // Strict hierarchy: place -> archetype -> room. Rooms only link to
-  // archetypes; places are reachable from rooms transitively. Fall back
-  // to direct room-place edges when the archetype layer is empty (e.g.
-  // first iteration before any classification has run).
-  if (dsg.graph->hasLayer(DsgLayers::ARCHETYPES) &&
-      dsg.graph->getLayer(DsgLayers::ARCHETYPES).numNodes() > 0) {
-    room_finder->addRoomArchetypeEdges(*dsg.graph);
+
+  const auto child_layer =
+      config.child_layer.empty() ? nullptr : dsg.graph->findLayer(config.child_layer);
+  if (child_layer && child_layer->numNodes() > 0) {
+    room_finder->addRoomChildEdges(*dsg.graph, config.child_layer, config.places_layer);
   } else {
     room_finder->addRoomPlaceEdges(*dsg.graph);
   }
+
   return;
 }
 

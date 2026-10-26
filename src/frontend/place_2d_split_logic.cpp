@@ -1,5 +1,6 @@
 #include "hydra/frontend/place_2d_split_logic.h"
 
+#include <kimera_pgmo/mesh_delta.h>
 #include <spark_dsg/dynamic_scene_graph.h>
 #include <spark_dsg/node_attributes.h>
 
@@ -7,6 +8,19 @@
 #include "opencv2/imgproc.hpp"
 
 namespace hydra {
+namespace {
+
+inline void remapPlace2dConnections(Place2dNodeAttributes& attrs,
+                                    const kimera_pgmo::MeshOffsetInfo& offsets) {
+  kimera_pgmo::MeshOffsetInfo::RemapStats info;
+  auto& connections = attrs.pcl_mesh_connections;
+  connections = offsets.remapVertexIndices(connections, &info);
+  attrs.pcl_min_index = info.min_index;
+  attrs.pcl_max_index = info.max_index;
+  attrs.has_active_mesh_indices = !info.all_archived;
+}
+
+}  // namespace
 
 void addRectInfo(const Place2d::CloudT& points,
                  const std::vector<Place2d::Index> mindices,
@@ -20,30 +34,22 @@ void addRectInfo(const Place2d::CloudT& points,
     region.push_back(cv::Point2f(points[midx].x(), points[midx].y()));
   }
 
-  // cv::minAreaRect runs convexHull internally, which segfaults on an empty
-  // region and is ill-defined for fewer than 3 points. A degenerate split
-  // (collinear/duplicate points, or a cut that leaves one side empty) reaches
-  // here with < 3 points; emit a finite, tiny, axis-aligned rect with a zero
-  // cut_plane so the caller sees an un-splittable leaf (cut_plane.norm() == 0
-  // fails the recursion guard) instead of crashing. Non-degenerate places
-  // (>= 3 points) are untouched.
+  // cv::minAreaRect crashes on an empty region and is ill-defined below 3 points, so
+  // degenerate regions get a tiny rect and a zero cut plane (marking them as leaves)
   if (region.size() < 3) {
-    double cx = 0.0, cy = 0.0;
+    Eigen::Vector2d centroid = Eigen::Vector2d::Zero();
     for (const auto& p : region) {
-      cx += p.x;
-      cy += p.y;
+      centroid += Eigen::Vector2d(p.x, p.y);
     }
-    const double n = region.empty() ? 1.0 : static_cast<double>(region.size());
-    ellipse_centroid << cx / n, cy / n;
+
+    ellipse_centroid = region.empty() ? centroid : centroid / region.size();
     m_expand = 1.0e-2 * Eigen::Matrix2d::Identity();
-    const Eigen::Matrix2d minv = m_expand.inverse();
-    m_compress = minv.transpose() * minv;
+    const Eigen::Matrix2d m_inv = m_expand.inverse();
+    m_compress = m_inv.transpose() * m_inv;
     cut_plane.setZero();
     return;
   }
 
-  // fit the minimum-area rotated rectangle to the place's 2D points; its axes define
-  // both the connection ellipse and the direction to split the place along
   cv::RotatedRect box = cv::minAreaRect(region);
 
   cv::Point2f box_pts[4];
@@ -53,22 +59,17 @@ void addRectInfo(const Place2d::CloudT& points,
   cv::Point2f e1_ray = box_pts[1] - box_pts[0];
   cv::Point2f e2_ray = box_pts[3] - box_pts[0];
 
-  // the cut plane runs along the longer side, so splits bisect the elongated dimension
   cv::Point2f long_ray = cv::norm(e1_ray) > cv::norm(e2_ray) ? e1_ray : e2_ray;
 
   cv::Point2f box_center = (box_pts[0] + box_pts[1] + box_pts[2] + box_pts[3]) / 4;
   ellipse_centroid(0) = box_center.x;
   ellipse_centroid(1) = box_center.y;
 
-  // m_expand maps the unit circle to the connection ellipse (half-side vectors scaled by
-  // sqrt(2) so the rectangle inscribes in the ellipse, times the tuning factor)
   m_expand(0, 0) = connection_ellipse_scale_factor * sqrt(2) * (e1_ray.x / 2);
   m_expand(1, 0) = connection_ellipse_scale_factor * sqrt(2) * (e1_ray.y / 2);
   m_expand(0, 1) = connection_ellipse_scale_factor * sqrt(2) * (e2_ray.x / 2);
   m_expand(1, 1) = connection_ellipse_scale_factor * sqrt(2) * (e2_ray.y / 2);
 
-  // m_compress is the quadratic form of the ellipse (inverse map composed with itself),
-  // so x^T m_compress x <= 1 tests membership
   Eigen::Matrix2d minv = m_expand.inverse();
   m_compress = minv.transpose() * minv;
 
@@ -161,8 +162,6 @@ std::pair<Place2d, Place2d> splitPlace(const Place2d::CloudT& points,
   size_t min_ix_2 = SIZE_MAX;
   size_t max_ix_2 = 0;
 
-  // partition points by which side of the cut line (through the centroid, along
-  // cut_plane) they fall on; points exactly on the line go to both children
   for (auto midx : place.indices) {
     Eigen::Vector2d pt(points[midx].x(), points[midx].y());
     double side = (pt - place.ellipse_centroid).dot(place.cut_plane);
@@ -218,19 +217,12 @@ std::vector<Place2d> decomposePlace(const Place2d::CloudT& cloud_pts,
   std::pair<Place2d, Place2d> children =
       splitPlace(cloud_pts, place, connection_ellipse_scale_factor);
 
-  // Guard against degenerate splits. When a place can't be bisected (collinear/
-  // duplicate points, or a zero cut_plane), splitPlace returns an empty child
-  // and/or a child no smaller than the parent. Recursing on such a child loops
-  // forever and eventually feeds an empty region to cv::minAreaRect -> SIGSEGV.
-  // A split is only valid if it cleanly bisects the place into two non-empty
-  // parts, each strictly smaller than the parent; otherwise treat the place as
-  // an un-splittable leaf. Non-degenerate places split exactly as before.
-  const size_t parent_size = place.indices.size();
-  const bool clean_bisection =
-      !children.first.indices.empty() && !children.second.indices.empty() &&
-      children.first.indices.size() < parent_size &&
-      children.second.indices.size() < parent_size;
-  if (!clean_bisection) {
+  // a split that doesn't cut the place into two smaller, non-empty parts would recurse
+  // forever, so the place is kept whole
+  const auto parent_size = place.indices.size();
+  const auto& [first, second] = children;
+  if (first.indices.empty() || second.indices.empty() ||
+      first.indices.size() >= parent_size || second.indices.size() >= parent_size) {
     return {place};
   }
 
@@ -305,6 +297,26 @@ bool shouldAddPlaceConnection(const Place2d& p1,
     return true;
   } else {
     return false;
+  }
+}
+
+void remapPlace2dMesh(Place2dNodeAttributes& attrs,
+                      const kimera_pgmo::MeshOffsetInfo& offsets) {
+  remapPlace2dConnections(attrs, offsets);
+
+  auto& indices = attrs.pcl_boundary_connections;
+  kimera_pgmo::MeshOffsetInfo::RemapStats info;
+  indices = offsets.remapVertexIndices(indices, &info);
+
+  const auto prev_boundary = attrs.boundary;
+  attrs.boundary.clear();
+  attrs.boundary.reserve(prev_boundary.size());
+  for (size_t i = 0; i < prev_boundary.size(); ++i) {
+    if (info.deleted_indices.count(i)) {
+      continue;
+    }
+
+    attrs.boundary.push_back(prev_boundary[i]);
   }
 }
 

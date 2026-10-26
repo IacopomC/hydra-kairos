@@ -36,43 +36,24 @@
 
 #include "hydra/active_window/active_window_output.h"
 #include "hydra/common/dsg_types.h"
-#include "hydra/utils/log_utilities.h"
-
-/**
- * @file freespace_places_interface.h
- * @brief Abstract interface for extracting free-space place nodes from the
- *        reconstructed map and inserting them into the scene graph.
- */
 
 namespace hydra {
 
-/// @brief Interface for a free-space place extractor. Implementations detect
-/// places from the active-window map, write them into the scene graph, and
-/// report which place nodes are currently active.
 class FreespacePlacesInterface {
  public:
-  using PositionMatrix = Eigen::Matrix<double, 3, Eigen::Dynamic>;  ///< 3xN matrix of world positions.
+  using PositionMatrix = Eigen::Matrix<double, 3, Eigen::Dynamic>;
 
   FreespacePlacesInterface() {}
 
   virtual ~FreespacePlacesInterface() = default;
 
-  /// @brief Persist any internal state for offline inspection.
-  virtual void save(const LogSetup& /* logs */) const {}
-
-  /// @brief Run place detection over the latest active-window output.
   virtual void detect(const ActiveWindowOutput& msg) = 0;
 
-  /// @brief Write the detected places into the scene graph at the given time.
   virtual void updateGraph(uint64_t timestamp_ns, DynamicSceneGraph& graph) = 0;
 
-  /// @brief Return the set of place nodes currently considered active.
   virtual NodeIdSet getActiveNodes() const = 0;
 
-  /// @brief Test whether each input position lies in observed free space.
-  /// @param positions 3xN matrix of world positions to query.
-  /// @param freespace_distance_m Minimum clearance required to count as free.
-  /// @return One flag per column; empty if the query is unsupported or has no input.
+  // takes in a 3xN matrix
   virtual std::vector<bool> inFreespace(const PositionMatrix& /* positions */,
                                         double /* freespace_distance_m */) const {
     return {};

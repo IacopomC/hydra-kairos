@@ -51,14 +51,12 @@ namespace hydra::places {
 using timing::ScopedTimer;
 
 GvdIntegrator::GvdIntegrator(const GvdIntegratorConfig& config,
-                             const GvdLayer::Ptr& gvd_layer,
-                             const GraphExtractorInterface::Ptr& graph_extractor)
+                             const GvdLayer::Ptr& gvd_layer)
     : default_distance_(config.max_distance_m),
       config_(config),
       gvd_layer_(gvd_layer),
-      graph_extractor_(graph_extractor),
       neighbor_search_(26) {
-  // TODO: we could consider an exception here
+  // TODO(nathan) we could consider an exception here
   CHECK(gvd_layer_);
 
   // config_.positive_distance_only toggles between only integrating to the negative
@@ -67,9 +65,8 @@ GvdIntegrator::GvdIntegrator(const GvdIntegratorConfig& config,
                                     ? -config_.min_distance_m
                                     : -config_.max_distance_m;
 
-  // the open queue is a bucketed priority queue keyed on distance; size it so each
-  // bucket spans roughly half a voxel, keeping the wavefront ordered finely enough that
-  // a parent is processed before its children
+  // we want at least enough buckets so that we bin voxels within approximately the same
+  // distance (i.e. within half a voxel)
   const size_t num_buckets = 4 * config_.max_distance_m / gvd_layer_->voxel_size;
   open_.setNumBuckets(num_buckets, config_.max_distance_m);
 }
@@ -78,7 +75,6 @@ void GvdIntegrator::updateFromTsdf(uint64_t timestamp_ns,
                                    const TsdfLayer& tsdf,
                                    bool clear_updated_flag,
                                    bool use_all_blocks) {
-  // only revisit blocks whose TSDF changed unless a full rebuild was requested
   const BlockIndices blocks =
       use_all_blocks ? tsdf.allocatedBlockIndices()
                      : tsdf.blockIndicesWithCondition(TsdfBlock::esdfUpdated);
@@ -87,8 +83,6 @@ void GvdIntegrator::updateFromTsdf(uint64_t timestamp_ns,
   ScopedTimer timer("places/propagate_tsdf", timestamp_ns);
   update_stats_.clear();
 
-  // for each touched block, mark surface voxels then queue distance changes; the actual
-  // wavefront propagation is deferred to updateGvd
   for (const BlockIndex& idx : blocks) {
     propagateSurface(idx, tsdf);
     processTsdfBlock(tsdf.getBlock(idx), idx);
@@ -98,37 +92,34 @@ void GvdIntegrator::updateFromTsdf(uint64_t timestamp_ns,
     return;
   }
 
-  // consume the dirty flags so the same blocks aren't reprocessed next cycle
   for (const auto& idx : blocks) {
     tsdf.getBlock(idx).esdf_updated = false;
   }
 }
 
-void GvdIntegrator::updateGvd(uint64_t timestamp_ns) {
+void GvdIntegrator::updateGvd(uint64_t timestamp_ns, GraphExtractor* graph_extractor) {
   ScopedTimer timer("places/overall_update", timestamp_ns);
 
-  // drain the raise/lower wavefront to bring all distances and Voronoi flags current
   VLOG(2) << "[GVD update] Processing open queue";
   {  // timing scope
     ScopedTimer timer("places/open_queue", timestamp_ns);
-    processOpenQueue();
+    processOpenQueue(graph_extractor);
   }  // timing scope
 
-  // garbage-collect parent vertices that lost all references during this update
   parent_tracker_.updateVertexMapping(*gvd_layer_);
 
-  // hand the refreshed Voronoi diagram to the place-graph extractor
-  if (graph_extractor_) {
+  if (graph_extractor) {
     VLOG(2) << "[GVD update] Starting graph extraction";
     ScopedTimer timer("places/graph_extractor", timestamp_ns);
-    graph_extractor_->extract(*gvd_layer_, timestamp_ns);
-    graph_extractor_->fillParentInfo(*gvd_layer_, parent_tracker_);
+    graph_extractor->extract(*gvd_layer_, timestamp_ns);
+    graph_extractor->fillParentInfo(*gvd_layer_, parent_tracker_);
   }
 
   VLOG(2) << "[GVD update]" << std::endl << update_stats_;
 }
 
-void GvdIntegrator::archiveBlocks(const BlockIndices& blocks) {
+void GvdIntegrator::archiveBlocks(const BlockIndices& blocks,
+                                  GraphExtractor* graph_extractor) {
   for (const auto& idx : blocks) {
     auto block = gvd_layer_->getBlockPtr(idx);
     if (!block) {
@@ -136,8 +127,6 @@ void GvdIntegrator::archiveBlocks(const BlockIndices& blocks) {
       continue;
     }
 
-    // before dropping the block, detach each observed voxel from the downstream
-    // bookkeeping so the graph and parent maps don't keep dangling references
     for (size_t v = 0; v < block->numVoxels(); ++v) {
       const GvdVoxel& voxel = block->getVoxel(v);
       if (!voxel.observed) {
@@ -145,8 +134,8 @@ void GvdIntegrator::archiveBlocks(const BlockIndices& blocks) {
       }
 
       const GlobalIndex global_index = block->getGlobalVoxelIndex(v);
-      if (graph_extractor_) {
-        graph_extractor_->removeDistantIndex(global_index);
+      if (graph_extractor) {
+        graph_extractor->removeDistantIndex(global_index);
       }
 
       parent_tracker_.removeVoronoiFromGvdParentMap(global_index);
@@ -165,8 +154,6 @@ bool GvdIntegrator::setFixedParent(const GvdLayer& layer,
   const GvdVoxel* best_neighbor = nullptr;
   GlobalIndex best_index;
 
-  // pick the neighbor that yields the smallest extrapolated distance to a surface; only
-  // fixed-layer neighbors that already trace back to a surface are valid candidates
   for (const auto& neighbor_index : neighbor_indices) {
     const GvdVoxel* neighbor = layer.getVoxelPtr(neighbor_index);
     if (!neighbor) {
@@ -183,8 +170,7 @@ bool GvdIntegrator::setFixedParent(const GvdLayer& layer,
       continue;
     }
 
-    // extend the neighbor's distance by the inter-voxel spacing, matching the sign of
-    // this voxel so we stay on the correct side of the surface
+    // TODO(nathan) might need to double check handling of negative distances here
     const float dist =
         (voxel_index - neighbor_index).cast<float>().norm() * layer.voxel_size;
     const float dist_n = neighbor->distance + std::copysign(dist, voxel.distance);
@@ -210,36 +196,37 @@ bool GvdIntegrator::setFixedParent(const GvdLayer& layer,
 
 void GvdIntegrator::updateGvdVoxel(const GlobalIndex& voxel_index,
                                    GvdVoxel& voxel,
-                                   GvdVoxel& other) {
-  // first time a voxel becomes Voronoi: register its own parent as a basis vertex
+                                   GvdVoxel& other,
+                                   GraphExtractor* graph_extractor) {
   if (!isVoronoi(voxel)) {
     update_stats_.number_voronoi_found++;
     parent_tracker_.markNewGvdParent(*gvd_layer_, voxel.parent);
   }
 
-  // try to add the other voxel's parent as an additional basis point; extra basis points
-  // are how we count the number of distinct obstacles equidistant from this voxel
   auto new_basis = parent_tracker_.updateGvdParentMap(
       *gvd_layer_, config_.voronoi_config, voxel_index, other);
   if (new_basis == voxel.num_extra_basis) {
-    return;  // parent wasn't unique enough to add, nothing changed
+    return;
   }
 
   voxel.num_extra_basis = new_basis;
 
   // pushes the new gvd member to the graph extractor on the first instance that the
   // voxel is observed
-  if (graph_extractor_ && voxel.num_extra_basis == 1) {
-    graph_extractor_->pushGvdIndex(voxel_index);
+  if (graph_extractor && voxel.num_extra_basis == 1) {
+    graph_extractor->pushGvdIndex(voxel_index);
   }
 }
 
-void GvdIntegrator::clearGvdVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
+void GvdIntegrator::clearGvdVoxel(const GlobalIndex& index,
+                                  GvdVoxel& voxel,
+                                  GraphExtractor* graph_extractor) {
   if (voxel.num_extra_basis) {
-    // TODO: rethink how clearing voxels from graph extractor works
-    if (graph_extractor_) {
-      graph_extractor_->clearGvdIndex(index);
+    // TODO(nathan) rethink how clearing voxels from graph extractor works
+    if (graph_extractor) {
+      graph_extractor->clearGvdIndex(index);
     }
+
     parent_tracker_.removeVoronoiFromGvdParentMap(index);
   }
 
@@ -249,9 +236,8 @@ void GvdIntegrator::clearGvdVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
 void GvdIntegrator::updateVoronoiQueue(GvdVoxel& voxel,
                                        const GlobalIndex& voxel_idx,
                                        GvdVoxel& neighbor,
-                                       const GlobalIndex& neighbor_idx) {
-  // a pair of adjacent voxels can independently qualify as Voronoi; update whichever
-  // side(s) the geometric test flags
+                                       const GlobalIndex& neighbor_idx,
+                                       GraphExtractor* extractor) {
   VoronoiCondition result =
       checkVoronoi(config_.voronoi_config, voxel, voxel_idx, neighbor, neighbor_idx);
 
@@ -260,11 +246,11 @@ void GvdIntegrator::updateVoronoiQueue(GvdVoxel& voxel,
   }
 
   if (result.current_is_voronoi) {
-    updateGvdVoxel(voxel_idx, voxel, neighbor);
+    updateGvdVoxel(voxel_idx, voxel, neighbor, extractor);
   }
 
   if (result.neighbor_is_voronoi) {
-    updateGvdVoxel(neighbor_idx, neighbor, voxel);
+    updateGvdVoxel(neighbor_idx, neighbor, voxel, extractor);
   }
 }
 
@@ -277,9 +263,7 @@ void GvdIntegrator::propagateSurface(const BlockIndex& block_index,
   const auto& tsdf_block = tsdf.getBlock(block_index);
   auto& gvd_block = gvd_layer_->allocateBlock(block_index);
 
-  // half the voxel diagonal: any TSDF voxel whose distance is below this is treated as
-  // containing the surface and so seeds the distance field as its own parent
-  // TODO: need to enforce that this is smaller than the truncation distance
+  // TODO(nathan) need to enforce that this is smaller than the truncation distance
   // otherwise updated blocks in free-space will clear the ESDF
   const auto surface_threshold = std::sqrt(3.0) * tsdf.voxel_size / 2.0;
   for (size_t idx = 0u; idx < tsdf_block.numVoxels(); ++idx) {
@@ -298,8 +282,6 @@ void GvdIntegrator::propagateSurface(const BlockIndex& block_index,
 
     resetParent(gvd_voxel);  // surface voxels don't have parents
 
-    // store the surface location as this voxel's parent position; optionally refine it
-    // along the TSDF gradient toward the true zero-crossing for sub-voxel accuracy
     Point pos = tsdf_block.getVoxelPosition(idx);
     if (config_.refine_voxel_pos) {
       const auto grad = computeGradient(tsdf, tsdf.getGlobalVoxelIndex(pos));
@@ -366,8 +348,6 @@ void GvdIntegrator::updateUnobservedVoxel(const TsdfVoxel& tsdf_voxel,
     update_stats_.number_surface_flipped++;
   }
 
-  // not near a surface: seed with the max distance and leave it unqueued; a neighboring
-  // lower wavefront will pull it down to its true value
   setDefaultDistance(gvd_voxel, default_distance_);
   VLOG(10) << "[gvd] voxel @ " << index.transpose() << " set to default of "
            << gvd_voxel.distance;
@@ -382,14 +362,10 @@ void GvdIntegrator::updateObservedVoxel(const TsdfVoxel& tsdf_voxel,
   VLOG(10) << "[gvd] updating observed @ " << index.transpose()
            << " (d=" << tsdf_voxel.distance << ", gd=" << gvd_voxel.distance << ")";
 
-  // classify how the new TSDF reading changes this voxel and enqueue the appropriate
-  // wavefront: entering/leaving the fixed (near-surface) band, gaining a smaller fixed
-  // distance, or flipping sign all require queueing either a lower or a raise
+  // we can use this to check more intelligently for flipped voxels later
   gvd_voxel.is_negative = tsdf_voxel.distance < 0.0;
   const bool is_fixed = isTsdfFixed(tsdf_voxel);
 
-  // a voxel that is neither on a surface nor pointing at one used to be free-space that
-  // a surface has now vacated; queue it to raise (invalidate) its stale distance
   if (!gvd_voxel.on_surface && !gvd_voxel.has_parent) {
     VLOG(10) << "[gvd] raising potential previous surface voxel";
     // raise any "cleared" voxels (equivalent to removeObstacle in Lau et al.)
@@ -454,7 +430,7 @@ void GvdIntegrator::updateObservedVoxel(const TsdfVoxel& tsdf_voxel,
   }
 
   VLOG(10) << "[gvd] raising flipped voxel @ " << index.transpose();
-  // TODO: add to tracked statistics
+  // TODO(nathan) add to tracked statistics
   // we raise any voxel where the sign flips
   pushToQueue(index, gvd_voxel);  // push uses distance and needs to come before raise
   setRaiseStatus(gvd_voxel, default_distance_);
@@ -482,24 +458,27 @@ void GvdIntegrator::raiseVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
 
     if (neighbor == nullptr || !neighbor->observed || neighbor->to_raise ||
         !neighbor->has_parent || neighbor->on_surface) {
-      // this covers the check on Lau et al. 32: skip neighbors that can't carry the
-      // raise wavefront: ones that don't exist, are already queued to raise, or no
-      // longer have a parent to invalidate
+      // this covers the check on Lau et al. 32: we don't need to propagate the
+      // wavefront if another voxel:
+      // 1) doesn't exist
+      // 2) has already been inserted in the raise queue
+      // 3) if the parent has already been cleared
+      // TODO(nathan) on surface should be covered by !has_parent
       continue;
     }
 
-    // starts a lower wavefront at the end of raising (see Lau et al. 33) or continues
-    // propagating the raise wavefront; re-queue the neighbor: it either continues the
-    // raise wavefront below or, once its parent is gone, gets re-lowered from a
-    // still-valid neighbor on a later pass
+    // starts a lower wavefront at the end of raising (see Lau et al. 33)
+    // or continues propagating raise wavefront
     pushToQueue(neighbor_index, *neighbor);
     VLOG(10) << "[gvd] pushing neighbor " << *neighbor << " @ "
              << neighbor_index.transpose() << " to queue";
 
-    // Lau et al. 34: check to see if the parent of the neighbor still exists.
-    // look up the neighbor's parent: with bucket resolution at or below voxel
-    // resolution, a parent is always cleared before its children, so a still-present
-    // surface parent means this neighbor's distance is still valid and must not raise
+    // Lau et al. 34: check to see if the parent of the neighbor still exists
+    // as long as the bucket resolution is the same or less than the voxel resolution,
+    // it should be an invariant that the parent gets cleared before the children
+    // we can't promise that the parent exists though. Maybe we can promise that the
+    // parent will exist if it gets cleared?
+    // yes: we shouldn't be able to clear it if it doesn't exist.
     GvdVoxel* parent_ptr = gvd_layer_->getVoxelPtr(neighbor->parent);
     if (parent_ptr) {
       VLOG(10) << "[gvd] parent: " << *parent_ptr << " @ "
@@ -516,19 +495,22 @@ void GvdIntegrator::raiseVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
     setRaiseStatus(*neighbor, default_distance_);
   }
 
-  // TODO: make sure we handle raise criteria appropriately earlier
+  // TODO(nathan) make sure we handle raise criteria appropriately earlier
   update_stats_.number_raise_updates++;
   voxel.to_raise = false;
   VLOG(10) << "after raise: " << voxel << " @ " << index.transpose();
 }
 
-void GvdIntegrator::lowerVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
+void GvdIntegrator::lowerVoxel(const GlobalIndex& index,
+                               GvdVoxel& voxel,
+                               GraphExtractor* extractor) {
   update_stats_.number_lower_updated++;
   const auto neighbor_indices = neighbor_search_.neighborIndices(index);
 
   if (voxel.fixed && !voxel.has_parent && !voxel.on_surface) {
-    // parent assignment for fixed-layer voxels is delayed until they are lowered, by
-    // which point every candidate parent has already been processed off the open queue
+    // we delay assigning parents for voxels in the fixed layer until this point
+    // as it should be an invariant that all potential parents have been seen by
+    // processLowerSet
     if (!setFixedParent(*gvd_layer_, neighbor_indices, index, voxel)) {
       update_stats_.number_fixed_no_parent++;
       VLOG(5) << "[GVD Update] Unable to set parent for fixed voxel: " << voxel;
@@ -541,13 +523,10 @@ void GvdIntegrator::lowerVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
   const Point p_p = getParentPosition(index, voxel);
   const Point p_v = gvd_layer_->getVoxelPosition(index);
 
-  // vector from parent to this voxel; used to only expand neighbors that lie roughly
-  // "downstream" of the parent direction, which prunes redundant wavefront updates
   const GlobalIndex w =
       voxel.has_parent ? (index - voxel.parent).eval() : GlobalIndex::Zero();
   for (const auto& neighbor_index : neighbor_indices) {
-    // get normal to parent for improved neighborhood expansion in section 4.3:
-    // skip neighbors on the parent side of this voxel: they can't be lowered by us
+    // get normal to parent for improved neighborhood expansion in section 4.3
     if (((neighbor_index - index).cwiseProduct(w).array() < 0).any()) {
       continue;
     }
@@ -559,14 +538,10 @@ void GvdIntegrator::lowerVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
       continue;
     }
 
-    // candidate distance for the neighbor is its straight-line distance to our parent
-    // surface point, carrying the neighbor's existing sign
     DistancePotential candidate;
     const Point p_n = gvd_layer_->getVoxelPosition(neighbor_index);
     candidate.distance = std::copysign((p_n - p_p).norm(), neighbor->distance);
     candidate.is_lower = std::abs(candidate.distance) < std::abs(neighbor->distance);
-    // adopt a parentless, non-fixed neighbor even without a strict improvement so it
-    // gets attached to a surface rather than being left at the default distance
     if (!neighbor->fixed && !candidate.is_lower && !neighbor->has_parent) {
       update_stats_.number_force_lowered++;
       candidate.is_lower = true;
@@ -576,27 +551,24 @@ void GvdIntegrator::lowerVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
              << " @ " << neighbor_index.transpose() << " (for " << index.transpose()
              << ")";
 
-    // ignore candidates beyond the integration band on either side of the surface.
     // TODO(nathan) this used to be before calling lower, not for each neighbor. Both
     // seem correct, but this is closer to the Lau et al. paper
     if (candidate.distance >= config_.max_distance_m ||
         candidate.distance <= min_integration_distance_m_) {
+      // TODO(nathan) track this as a statistic?
       continue;
     }
 
-    // if we can't lower the neighbor, the two voxels are claimed by different surfaces
-    // at comparable distance: test whether the boundary between them is Voronoi
     if (!candidate.is_lower) {
-      updateVoronoiQueue(voxel, index, *neighbor, neighbor_index);
+      updateVoronoiQueue(voxel, index, *neighbor, neighbor_index, extractor);
       continue;
     }
 
     if (neighbor->fixed) {
-      // fixed voxels get their distance directly from the TSDF; don't overwrite it
+      // TODO(nathan) maybe reconsider this
       continue;
     }
 
-    // commit the lower: adopt the new distance, inherit our parent surface, and re-queue
     neighbor->distance = candidate.distance;
     setSdfParent(*neighbor, voxel, index, p_v);
     VLOG(10) << "pushing neighbor " << *neighbor << " @ " << neighbor_index.transpose()
@@ -606,18 +578,16 @@ void GvdIntegrator::lowerVoxel(const GlobalIndex& index, GvdVoxel& voxel) {
 }
 
 // updateDistanceMap in "B. Lau et al., Efficient grid-based .. (2013)"
-void GvdIntegrator::processOpenQueue() {
+void GvdIntegrator::processOpenQueue(GraphExtractor* extractor) {
   VLOG(10) << "***************************************************";
   VLOG(10) << "* Processing Open Queue                           *";
   VLOG(10) << "***************************************************";
   while (!open_.empty()) {
-    // TODO: potentially add telemetry
+    // TODO(nathan) potentially add telemetry
     auto entry = open_.front();
     open_.pop();
 
     // from Lau et al: Section 4.2
-    // a voxel can be enqueued multiple times before being popped; the in_queue flag lets
-    // us process only the most recent entry and discard the stale duplicates
     if (!entry.voxel->in_queue) {
       continue;
     }
@@ -629,7 +599,6 @@ void GvdIntegrator::processOpenQueue() {
     VLOG(10) << "-----------------------";
     VLOG(10) << "processing " << voxel << " @ " << index.transpose();
 
-    // each popped voxel is handled as exactly one of raise or lower
     if (voxel.to_raise) {
       voxel.to_raise = false;
       raiseVoxel(index, voxel);
@@ -638,18 +607,16 @@ void GvdIntegrator::processOpenQueue() {
     }
 
     // this is slightly different than Lau et al, as there are voxels without parents
-    // that still have a valid distance and can be used to lower neighboring voxels.
-    // skip voxels with no valid distance to propagate; fixed voxels are allowed through
-    // even without a parent because they carry a valid distance and can lower neighbors
+    // that still have a valid distance and can be used to lower neighboring voxels
+    // (i.e., fixed voxels that still need an assigned parent)
     if ((!voxel.has_parent && !voxel.fixed) || !voxel.observed) {
       update_stats_.number_lower_skipped++;
       VLOG(10) << "skipped";
       continue;
     }
 
-    // re-evaluate Voronoi membership from scratch, then push the lower wavefront outward
-    clearGvdVoxel(index, voxel);
-    lowerVoxel(index, voxel);
+    clearGvdVoxel(index, voxel, extractor);
+    lowerVoxel(index, voxel, extractor);
   }
 }
 

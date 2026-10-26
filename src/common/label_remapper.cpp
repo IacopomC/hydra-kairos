@@ -18,10 +18,10 @@ void declare_config(LabelRemapRow& config) {
 LabelRemapper::LabelRemapper() {}
 
 LabelRemapper::LabelRemapper(const std::string& remapping_file) {
-  // parse the file as a flat list of sub_id/super_id rows
+  // Read the file.
   auto remappings = config::fromYamlFile<std::vector<LabelRemapRow>>(remapping_file);
 
-  // index the rows by sub_id for O(1) lookup during remapping
+  // Convert to map.
   for (size_t i = 0; i < remappings.size(); i++) {
     const auto& id_pair = remappings[i];
     label_remapping_[id_pair.sub_id] = id_pair.super_id;

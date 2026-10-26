@@ -59,20 +59,10 @@ void declare_config(LoopClosureConfig& conf) {
   field(conf.lcd_visualizer_ns, "lcd_visualizer_ns");
   field(conf.lcd_agent_horizon_s, "lcd_agent_horizon_s");
   field(conf.descriptor_creation_horizon_m, "descriptor_creation_horizon_m");
-  field(conf.bow_agent, "bow_agent");
+  field(conf.min_repeat_interval_s, "min_repeat_interval_s", "s");
 }
 
 namespace lcd {
-
-void declare_config(BowAgentSolver::Config& conf) {
-  using namespace config;
-  name("BowAgentSolver::Config");
-  field(conf.min_score, "min_score");
-  field(conf.dedup_window_s, "dedup_window_s");
-  check(conf.min_score, GE, 0.0, "min_score");
-  check(conf.min_score, LE, 1.0, "min_score");
-  check(conf.dedup_window_s, GE, 0.0, "dedup_window_s");
-}
 
 template <typename T>
 void declare_config(HistogramConfig<T>& conf) {
@@ -132,6 +122,7 @@ void declare_config(LayerLcdConfig& conf) {
   name("LayerLcdConfig");
   field(conf.matching, "search");
   field(conf.registration, "registration");
+  field(conf.enable_registration, "enable_registration");
 }
 
 void declare_config(LcdDetectorConfig& conf) {
@@ -145,8 +136,10 @@ void declare_config(LcdDetectorConfig& conf) {
   field(conf.places_extraction, "places_extraction");
   field(conf.place_histogram_config, "place_histogram_config");
   field(conf.agent_search_config, "agent");
+  conf.agent_registration.setOptional();
+  field(conf.agent_registration, "agent_registration");
 
-  // TODO: pin agent registration to agent min
+  // TODO(nathan) pin agent registration to agent min
 
   field(conf.use_gnn_descriptors, "use_gnn_descriptors");
   if (conf.use_gnn_descriptors) {

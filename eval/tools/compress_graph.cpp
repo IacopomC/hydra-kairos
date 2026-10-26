@@ -143,7 +143,7 @@ void remapPlaces(DynamicSceneGraph& graph,
                  const std::unordered_map<size_t, size_t>& remapping) {
   const auto& places = graph.getLayer(DsgLayers::PLACES);
   for (auto&& [id, node] : places.nodes()) {
-    VLOG(10) << "remapping place node: " << NodeSymbol(id).getLabel();
+    VLOG(10) << "remapping place node: " << NodeSymbol(id).str();
 
     auto& attrs = node->attributes<PlaceNodeAttributes>();
     for (auto& connection : attrs.pcl_mesh_connections) {
@@ -157,26 +157,8 @@ void remapPlaces(DynamicSceneGraph& graph,
   }
 }
 
-void compressMesh(DynamicSceneGraph& graph, double resolution) {
-  kimera_pgmo::DeltaCompression compression(resolution);
-  kimera_pgmo::HashedIndexMapping remapping;
-
-  if (!graph.mesh()) {
-    return;
-  }
-  PgmoMeshInterface interface(*graph.mesh());
-  auto delta = compression.update(interface, 0, &remapping);
-
-  auto& face_remapping = remapping.at(BlockIndex(0, 0, 0));
-  std::unordered_map<size_t, size_t> vertex_remapping;
-  for (auto&& [face_idx, new_idx] : face_remapping) {
-    size_t vertex_idx = getVertexFromFaces(*graph.mesh(), face_idx);
-    vertex_remapping[vertex_idx] = new_idx;
-  }
-
-  graph.setMesh(std::make_shared<spark_dsg::Mesh>());
-  delta->updateMesh(*graph.mesh());
-  remapPlaces(graph, vertex_remapping);
+void compressMesh(DynamicSceneGraph& /* graph */, double /* resolution */) {
+  throw std::runtime_error("Not implemented currently!");
 }
 
 void compressPlaces(DynamicSceneGraph& graph, double resolution) {

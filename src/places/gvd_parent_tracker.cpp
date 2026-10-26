@@ -46,8 +46,6 @@ uint8_t GvdParentTracker::updateGvdParentMap(const GvdLayer& layer,
     parents[voxel_index] = GlobalIndexSet();
   }
 
-  // only add the candidate parent if it is distinct from every parent already recorded
-  // for this voxel; otherwise the same obstacle would be double-counted as extra basis
   uint8_t curr_extra_basis = parents[voxel_index].size();
   for (const auto& other_parent : parents[voxel_index]) {
     const bool is_unique =
@@ -57,7 +55,7 @@ uint8_t GvdParentTracker::updateGvdParentMap(const GvdLayer& layer,
     }
   }
 
-  // parent is unique enough: record it and bump its vertex reference count
+  // parent is unique enough
   parents[voxel_index].insert(neighbor.parent);
   markNewGvdParent(layer, neighbor.parent);
   return curr_extra_basis + 1;
@@ -101,8 +99,6 @@ void GvdParentTracker::removeVoronoiFromGvdParentMap(const GlobalIndex& voxel_in
 }
 
 void GvdParentTracker::updateVertexMapping(const GvdLayer& layer) {
-  // deferred garbage collection of parent vertices: drop entries no longer referenced by
-  // any voxel or whose voxel has left the surface, and refresh surviving ones' positions
   auto iter = parent_vertices.begin();
   while (iter != parent_vertices.end()) {
     if (!iter->second.ref_count) {

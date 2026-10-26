@@ -39,61 +39,50 @@
 
 #include <Eigen/Geometry>
 
-/**
- * @file volumetric_window.h
- * @brief The window policy that decides which map blocks stay active: it tests
- *        each block against the window and archives those that fall outside.
- */
-
 namespace hydra {
 
 class VolumetricMap;
 
-/// @brief Lightweight descriptor of a map block for in-bounds testing.
 struct VolumetricBlockInfo {
-  const spatial_hash::BlockIndex index;  ///< Block index in the spatial hash.
-  const double block_size;               ///< Edge length of the block (m).
-  const uint64_t update_stamp_ns;        ///< Timestamp the block was last updated (ns).
+  const spatial_hash::BlockIndex index;
+  const double block_size;
+  const uint64_t update_stamp_ns;
 
   VolumetricBlockInfo(const spatial_hash::Block& block, uint64_t update_stamp_ns = 0);
   VolumetricBlockInfo(const spatial_hash::BlockIndex& index,
                       double block_size,
                       uint64_t update_stamp_ns = 0);
-  /// @brief World-frame center of the block.
   Eigen::Vector3f blockCenter() const;
 };
 
-/// @brief Interface for an active-window policy over the volumetric map.
 struct VolumetricWindow {
   virtual ~VolumetricWindow() = default;
 
-  /// @brief Archive every map block that is out of bounds for this pose.
-  /// @param timestamp_ns Current timestamp (ns).
-  /// @param world_T_body Current body pose in the world frame.
-  /// @param map Map to archive blocks from (modified in place).
-  /// @param skip_updated Skip blocks updated on this pass.
-  /// @return Indices of the blocks that were archived.
   spatial_hash::BlockIndices archiveBlocks(uint64_t timestamp_ns,
                                            const Eigen::Isometry3d& world_T_body,
                                            VolumetricMap& map,
                                            bool skip_updated = true) const;
 
-  /// @brief Whether the block lies within the active window for this pose.
+  bool inBounds(uint64_t timestamp_ns,
+                const Eigen::Isometry3d& world_T_body,
+                const VolumetricBlockInfo& block) const;
+
   virtual bool inBounds(uint64_t timestamp_ns,
                         const Eigen::Isometry3d& world_T_body,
-                        const VolumetricBlockInfo& block) const = 0;
+                        const uint64_t last_updated_ns,
+                        const Eigen::Vector3d& last_pos) const = 0;
 };
 
-/// @brief Window policy keeping blocks within a fixed radius of the body.
 struct SpatialWindowChecker : VolumetricWindow {
   struct Config {
-    double max_radius_m = 8.0;  ///< Radius of the active window around the body (m).
+    double max_radius_m = 8.0;
   } const config;
 
   explicit SpatialWindowChecker(const Config& config);
   bool inBounds(uint64_t timestamp_ns,
                 const Eigen::Isometry3d& world_T_body,
-                const VolumetricBlockInfo& block) const override;
+                const uint64_t last_updated_ns,
+                const Eigen::Vector3d& last_pos) const override;
 };
 
 void declare_config(SpatialWindowChecker::Config& config);

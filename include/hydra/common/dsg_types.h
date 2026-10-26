@@ -38,39 +38,15 @@
 #include <spark_dsg/node_attributes.h>
 #include <spark_dsg/node_symbol.h>
 
-/**
- * @file dsg_types.h
- * @brief Brings the scene-graph library types into the hydra namespace and
- *        provides position lookups for nodes across the different graph and
- *        layer container types.
- */
-
 namespace hydra {
 
 using namespace spark_dsg;
 
-/// @brief Return the position of a node in a static scene-graph layer.
-/// @param graph Layer containing the node.
-/// @param node Identifier of the node to query.
-/// @return Reference to the node's position.
 inline const Eigen::Vector3d& getNodePosition(const SceneGraphLayer& graph,
                                               NodeId node) {
   return graph.getNode(node).attributes().position;
 }
 
-/// @brief Return the position of a node in a dynamic scene-graph layer.
-/// @param graph Dynamic layer containing the node.
-/// @param node Identifier of the node to query.
-/// @return Reference to the node's position.
-inline const Eigen::Vector3d& getNodePosition(const DynamicSceneGraphLayer& graph,
-                                              NodeId node) {
-  return graph.getNode(node).attributes().position;
-}
-
-/// @brief Return the position of a node anywhere in a scene graph.
-/// @param graph Scene graph containing the node.
-/// @param node Identifier of the node to query.
-/// @return Reference to the node's position.
 inline const Eigen::Vector3d& getNodePosition(const DynamicSceneGraph& graph,
                                               NodeId node) {
   return graph.getNode(node).attributes().position;

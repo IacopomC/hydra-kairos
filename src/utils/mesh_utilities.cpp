@@ -35,6 +35,7 @@
 #include "hydra/utils/mesh_utilities.h"
 
 #include <pcl/point_types.h>
+#include <spark_dsg/node_attributes.h>
 #define PCL_NO_PRECOMPILE
 #include <pcl/filters/radius_outlier_removal.h>
 #undef PCL_NO_PRECOMPILE
@@ -42,11 +43,12 @@
 
 namespace hydra {
 
+using spark_dsg::NodeAttributes;
+using spark_dsg::ObjectNodeAttributes;
+
 bool updateNodeCentroid(const spark_dsg::Mesh& mesh,
                         const std::vector<size_t>& indices,
                         NodeAttributes& attrs) {
-  // Average the positions of the referenced mesh vertices, skipping any with
-  // non-finite coordinates so they do not corrupt the centroid.
   size_t num_valid = 0;
   Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
   for (const auto idx : indices) {
@@ -59,7 +61,6 @@ bool updateNodeCentroid(const spark_dsg::Mesh& mesh,
     ++num_valid;
   }
 
-  // Without any valid vertex the centroid is undefined, so leave attrs untouched.
   if (!num_valid) {
     return false;
   }
@@ -72,16 +73,12 @@ bool updateObjectGeometry(const spark_dsg::Mesh& mesh,
                           ObjectNodeAttributes& attrs,
                           const std::vector<size_t>* indices,
                           std::optional<BoundingBox::Type> type) {
-  // When explicit indices are not supplied, fall back to the vertices already
-  // associated with this object node via its stored mesh connections.
   std::vector<size_t> mesh_connections;
   if (!indices) {
     mesh_connections.assign(attrs.mesh_connections.begin(),
                             attrs.mesh_connections.end());
   }
 
-  // Recompute the bounding box over the selected vertices, keeping the existing
-  // box type unless the caller overrides it.
   const BoundingBox::MeshAdaptor adaptor(mesh, indices ? indices : &mesh_connections);
   attrs.bounding_box = BoundingBox(adaptor, type.value_or(attrs.bounding_box.type));
   if (indices) {
@@ -93,8 +90,6 @@ bool updateObjectGeometry(const spark_dsg::Mesh& mesh,
 
 MeshLayer::Ptr getActiveMesh(const MeshLayer& mesh_layer,
                              const BlockIndices& archived_blocks) {
-  // Copy only the recently updated blocks that have not been archived, yielding
-  // the still-active portion of the mesh.
   auto active_mesh = std::make_shared<MeshLayer>(mesh_layer.blockSize());
   const BlockIndexSet archived_set(archived_blocks.begin(), archived_blocks.end());
   for (const auto& block : mesh_layer.updatedBlockIndices()) {
@@ -112,7 +107,6 @@ BoundingBox fitBoxToFilteredMesh(const Mesh& mesh,
                                  BoundingBox::Type type,
                                  int inlier_min_neighbors,
                                  double inlier_search_radius) {
-  // Copy the mesh vertices into a PCL cloud so the radius outlier filter can run.
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
   for (const auto& vertex : mesh.points) {
     auto& p = cloud->emplace_back();
@@ -121,8 +115,6 @@ BoundingBox fitBoxToFilteredMesh(const Mesh& mesh,
     p.z = vertex[2];
   }
 
-  // Discard sparse/noisy vertices that lack enough neighbors within the radius,
-  // so stray points do not inflate the fitted box.
   pcl::RadiusOutlierRemoval<pcl::PointXYZ> filter;
   filter.setMinNeighborsInRadius(inlier_min_neighbors);
   filter.setRadiusSearch(inlier_search_radius);
@@ -131,7 +123,6 @@ BoundingBox fitBoxToFilteredMesh(const Mesh& mesh,
   pcl::Indices valid_list;
   filter.filter(valid_list);
 
-  // No inliers means there is nothing to bound; return an empty box.
   std::vector<size_t> mesh_connections(valid_list.begin(), valid_list.end());
   if (mesh_connections.empty()) {
     return {};

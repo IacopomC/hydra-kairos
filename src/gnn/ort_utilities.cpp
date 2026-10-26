@@ -83,7 +83,6 @@ void FieldInfo::validateTensor(const Tensor& tensor) const {
   }
 
   for (size_t i = 0; i < dims.size(); ++i) {
-    // a field dimension of -1 marks a dynamic axis, which accepts any size
     if (dims[i] == -1) {
       continue;
     }
@@ -102,8 +101,6 @@ void FieldInfo::validateTensor(const Tensor& tensor) const {
   }
 }
 
-// wraps the tensor's existing buffer as an ORT value without copying; the
-// const_cast is safe because ORT only writes to output tensors, never inputs
 template <typename T>
 Ort::Value makeOrtTensor(const OrtMemoryInfo* mem_info, const Tensor& input) {
   return Ort::Value::CreateTensor<T>(mem_info,
@@ -207,10 +204,6 @@ Tensor FieldInfo::getTensor() const {
 
 Tensor FieldInfo::getDynamicTensor(const std::vector<size_t>& dims_to_read,
                                    const std::vector<int64_t>& output_dims) const {
-  // build the concrete shape by walking the field's declared dims: fixed axes
-  // are copied as-is, while each dynamic axis (-1) is resolved in order. The
-  // n-th dynamic axis takes the index dims_to_read[n], which points into the
-  // caller's output_dims, and that value becomes the concrete size.
   size_t dynamic_index = 0;
   std::vector<int64_t> new_dims;
   for (size_t i = 0; i < dims.size(); ++i) {
@@ -219,7 +212,6 @@ Tensor FieldInfo::getDynamicTensor(const std::vector<size_t>& dims_to_read,
       continue;
     }
 
-    // every dynamic axis must have a corresponding entry in dims_to_read
     if (dynamic_index >= dims_to_read.size()) {
       std::stringstream ss;
       ss << "dynamic size required for axis " << i << " for field " << name;
@@ -269,9 +261,6 @@ std::vector<FieldInfo> readFieldInfo(const Ort::Session* session,
     return {};
   }
 
-  // generic field reader shared by the input and output paths: the three
-  // getters select which side of the session to query, so the loop over fields
-  // pulls each field's name, shape, and element type the same way for both
   std::vector<FieldInfo> fields;
   const size_t num_fields = size_getter(session);
   for (size_t i = 0; i < num_fields; ++i) {
@@ -373,4 +362,4 @@ std::ostream& operator<<(std::ostream& out, const FieldInfo& info) {
   return out;
 }
 
-}  // namespace::hydra
+}  // namespace hydra::gnn

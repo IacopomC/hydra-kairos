@@ -34,43 +34,21 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-#include <kimera_pgmo/mesh_delta.h>
+#include <spark_dsg/scene_graph_layer.h>
 
-#include "hydra/common/dsg_types.h"
-
-/**
- * @file place_mesh_connector.h
- * @brief Links place nodes to nearby mesh vertices and their deformation-graph
- *        indices using a spatial search over a mesh delta.
- */
+namespace kimera_pgmo {
+class MeshDelta;
+}
 
 namespace hydra {
 
-/// @brief Connects each active place node to its nearest mesh vertices.
-/// Builds a KD-tree over the active vertices of a mesh delta and, for every
-/// place, resolves its stored voxel connections to mesh vertices, deformation
-/// connections, and (when present) semantic labels.
 class PlaceMeshConnector {
  public:
-  using DeformationMapping = std::vector<size_t>;  ///< Maps local mesh indices to deformation-graph nodes.
+  using DeformationMapping = std::vector<size_t>;
 
-  /// @brief Build the connector and its spatial index over the given mesh delta.
-  /// @param delta Mesh delta whose active vertices are indexed; must be non-null.
-  explicit PlaceMeshConnector(const kimera_pgmo::MeshDelta::Ptr& delta);
-  ~PlaceMeshConnector();
-
-  /// @brief Resolve mesh and deformation connections for each active place node.
-  /// @param places Places layer whose active nodes are updated in place.
-  /// @param mapping Per-vertex mapping from mesh index to deformation-graph node.
-  /// @return Number of active places that had no voxel connections to resolve.
-  size_t addConnections(const SceneGraphLayer& places,
-                        const DeformationMapping& mapping) const;
-
- protected:
-  kimera_pgmo::MeshDelta::Ptr delta_;  ///< Mesh delta backing the spatial index.
-
-  struct Detail;                       ///< Hidden KD-tree and adaptor state.
-  std::unique_ptr<Detail> internals_;  ///< Opaque spatial-search implementation.
+  static size_t addConnections(const kimera_pgmo::MeshDelta& delta,
+                               const spark_dsg::SceneGraphLayer& places,
+                               const DeformationMapping& mapping);
 };
 
 }  // namespace hydra

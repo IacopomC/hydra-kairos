@@ -34,19 +34,10 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file sensor_extrinsics.h
- * @brief The rigid transform from the body frame to a sensor frame, with a few
- *        ways to supply it: identity, explicit parameters, or loaded from a
- *        Kimera-style calibration file.
- */
-
 #include <Eigen/Geometry>
 
 namespace hydra {
 
-/// @brief Body-to-sensor extrinsics: the sensor's orientation and position in
-/// the body frame, convertible to an isometry.
 struct SensorExtrinsics {
   SensorExtrinsics();
 
@@ -57,36 +48,32 @@ struct SensorExtrinsics {
   SensorExtrinsics(const Eigen::Quaterniond& body_R_sensor,
                    const Eigen::Vector3d& body_p_sensor);
 
-  /// @brief The body-to-sensor transform.
   inline operator Eigen::Isometry3d() const {
     return Eigen::Translation3d(body_p_sensor) * body_R_sensor;
   }
 
-  Eigen::Quaterniond body_R_sensor;  ///< Sensor orientation in the body frame.
-  Eigen::Vector3d body_p_sensor;     ///< Sensor position in the body frame.
+  Eigen::Quaterniond body_R_sensor;
+  Eigen::Vector3d body_p_sensor;
 };
 
-/// @brief Extrinsics fixed to the identity transform (sensor frame == body frame).
 struct IdentitySensorExtrinsics : public SensorExtrinsics {
   struct Config {};
 
   explicit IdentitySensorExtrinsics(const Config& config);
 };
 
-/// @brief Extrinsics supplied directly as config parameters.
 struct ParamSensorExtrinsics : public SensorExtrinsics {
   struct Config {
-    Eigen::Quaterniond body_R_sensor = Eigen::Quaterniond::Identity();  ///< Orientation.
-    Eigen::Vector3d body_p_sensor = Eigen::Vector3d::Zero();            ///< Position.
+    Eigen::Quaterniond body_R_sensor = Eigen::Quaterniond::Identity();
+    Eigen::Vector3d body_p_sensor = Eigen::Vector3d::Zero();
   };
 
   explicit ParamSensorExtrinsics(const Config& config);
 };
 
-/// @brief Extrinsics loaded from a Kimera-style calibration file.
 struct KimeraSensorExtrinsics : public SensorExtrinsics {
   struct Config {
-    std::string sensor_filepath = "";  ///< Path to the calibration file.
+    std::string sensor_filepath = "";
   };
 
   explicit KimeraSensorExtrinsics(const Config& config);

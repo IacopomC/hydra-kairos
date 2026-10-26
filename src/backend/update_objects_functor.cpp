@@ -55,8 +55,6 @@ NodeAttributes::Ptr mergeObjectAttributes(const DynamicSceneGraph& graph,
     return nullptr;
   }
 
-  // Seed the merged attributes from the first node, then union the mesh-vertex
-  // connections of every other node into it so the result spans all members.
   auto iter = nodes.begin();
   auto attrs_ptr = graph.getNode(*iter).attributes().clone();
   auto& new_attrs =
@@ -73,7 +71,6 @@ NodeAttributes::Ptr mergeObjectAttributes(const DynamicSceneGraph& graph,
     return attrs_ptr;
   }
 
-  // Recompute the centroid/bounding box from the unioned mesh connections.
   auto mesh = graph.mesh();
   if (!updateObjectGeometry(*mesh, new_attrs)) {
     VLOG(2) << "Merge geometry invalid: " << displayNodeSymbolContainer(nodes);
@@ -94,6 +91,10 @@ UpdateObjectsFunctor::UpdateObjectsFunctor(const Config& config)
 
 UpdateFunctor::Hooks UpdateObjectsFunctor::hooks() const {
   auto my_hooks = UpdateFunctor::hooks();
+  my_hooks.find_merges = [this](const auto& graph, const auto& info) {
+    return findMerges(graph, info);
+  };
+
   if (config.allow_connection_merging) {
     my_hooks.merge = &mergeObjectAttributes;
   }
@@ -113,8 +114,6 @@ void UpdateObjectsFunctor::call(const DynamicSceneGraph& unmerged,
   // we want to use the unmerged graph for most things
   const auto& objects = unmerged.getLayer(DsgLayers::OBJECTS);
   // we want to iterate over the unmerged graph
-  // After a loop closure all node positions may have shifted, so revisit every
-  // object; otherwise only touch the nodes that changed since the last pass.
   const auto new_loopclosure = info->loop_closure_detected;
   active_tracker.clear();  // reset from previous pass
   LayerView view = new_loopclosure ? LayerView(objects) : active_tracker.view(objects);
@@ -125,22 +124,25 @@ void UpdateObjectsFunctor::call(const DynamicSceneGraph& unmerged,
   const auto mesh = dsg.graph->mesh();
   for (const auto& node : view) {
     ++num_changed;
-    auto& attrs = node.attributes<ObjectNodeAttributes>();
-    VLOG(10) << "Processing object " << NodeSymbol(node.id).getLabel()
+    auto attrs = node.tryAttributes<ObjectNodeAttributes>();
+    if (!attrs) {
+      continue;  // not an object
+    }
+
+    VLOG(10) << "Processing object " << NodeSymbol(node.id).str()
              << " with attributes:\n"
-             << attrs;
-    if (attrs.mesh_connections.empty()) {
-      VLOG(2) << "Found empty object node " << NodeSymbol(node.id).getLabel();
+             << *attrs;
+    if (attrs->mesh_connections.empty()) {
+      VLOG(2) << "Found empty object node " << NodeSymbol(node.id).str();
       continue;
     }
 
-    if (!updateObjectGeometry(*mesh, attrs)) {
-      VLOG(2) << "Invalid centroid for object " << NodeSymbol(node.id).getLabel();
+    if (!updateObjectGeometry(*mesh, *attrs)) {
+      VLOG(2) << "Invalid centroid for object " << NodeSymbol(node.id).str();
     }
 
-    // Push the recomputed geometry into the published graph.
-    // TODO: this is sloppy and needs to be cleaned up
-    dsg.graph->setNodeAttributes(node.id, attrs.clone());
+    // TODO(nathan) this is sloppy and needs to be cleaned up
+    dsg.graph->setNodeAttributes(node.id, attrs->clone());
   }
 
   VLOG(2) << "[Hydra Backend] Object update: " << num_changed << " node(s)";
@@ -157,17 +159,19 @@ MergeList UpdateObjectsFunctor::findMerges(const DynamicSceneGraph& graph,
   // freeze layer view to avoid messing with tracker
   LayerView view = new_lcd ? LayerView(objects) : active_tracker.view(objects, true);
 
-  // Two objects merge when either one's bounding box contains the other's
-  // centroid (i.e. they spatially overlap).
   MergeList proposals;
   merge_proposer.findMerges(
       objects,
       view,
       [](const SceneGraphNode& lhs, const SceneGraphNode& rhs) {
-        const auto& lhs_attrs = lhs.attributes<SemanticNodeAttributes>();
-        const auto& rhs_attrs = rhs.attributes<SemanticNodeAttributes>();
-        return lhs_attrs.bounding_box.contains(rhs_attrs.position) ||
-               rhs_attrs.bounding_box.contains(lhs_attrs.position);
+        const auto lhs_attrs = lhs.tryAttributes<ObjectNodeAttributes>();
+        const auto rhs_attrs = rhs.tryAttributes<ObjectNodeAttributes>();
+        if (!lhs_attrs || !rhs_attrs) {
+          return false;
+        }
+
+        return lhs_attrs->bounding_box.contains(rhs_attrs->position) ||
+               rhs_attrs->bounding_box.contains(lhs_attrs->position);
       },
       proposals);
   return proposals;

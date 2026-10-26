@@ -37,6 +37,7 @@
 #include <glog/logging.h>
 #include <pose_graph_tools/pose_graph.h>
 
+#include "hydra/common/global_info.h"
 #include "hydra/utils/minimum_spanning_tree.h"
 #include "hydra/utils/timing_utilities.h"
 
@@ -56,25 +57,18 @@ void addPlacesToDeformationGraph(const DynamicSceneGraph& graph,
     return;
   }
 
-  ScopedTimer timer("backend/add_places", timestamp_ns);
-  // Places enter the deformation graph as temporary structures so they can be
-  // rebuilt from scratch each optimization rather than accumulated.
+  ScopedTimer timer("dsg_updater/add_places", timestamp_ns);
   deformation_graph.clearTemporaryStructures();
 
-  // Reduce the dense places connectivity to a spanning tree: only tree edges
-  // become deformation factors, which keeps the factor graph sparse.
   MinimumSpanningTreeInfo mst_info;
   {  // start timing scope
-    ScopedTimer mst_timer("backend/places_mst", timestamp_ns);
+    ScopedTimer mst_timer("dsg_updater/places_mst", timestamp_ns);
     mst_info = getMinimumSpanningEdges(places);
   }  // end timing scope
 
   {  // start timing scope
-    ScopedTimer add_timer("backend/add_places_nodes", timestamp_ns);
+    ScopedTimer add_timer("dsg_updater/add_places_nodes", timestamp_ns);
 
-    // Add one temporary node per connected place. Leaf places additionally get
-    // pinned to their mesh-vertex deformation connections so the tree is
-    // anchored to the mesh; interior nodes are constrained only via tree edges.
     kimera_pgmo::NodeValenceInfoList factors;
     for (const auto& [node_id, node] : places.nodes()) {
       const auto& attrs = node->attributes<PlaceNodeAttributes>();
@@ -90,7 +84,7 @@ void addPlacesToDeformationGraph(const DynamicSceneGraph& graph,
       if (mst_info.leaves.count(node_id)) {
         for (const auto& idx : attrs.deformation_connections) {
           if (idx == std::numeric_limits<size_t>::max()) {
-            continue;  // skip unset/invalid mesh connections
+            continue;
           }
           factor.valence.push_back(idx);
         }
@@ -101,9 +95,8 @@ void addPlacesToDeformationGraph(const DynamicSceneGraph& graph,
   }  // end timing scope
 
   {  // start timing scope
-    // Turn each spanning-tree edge into a relative-pose between factor on the
-    // place nodes.
-    ScopedTimer between_timer("backend/add_places_between", timestamp_ns);
+    ScopedTimer between_timer("dsg_updater/add_places_between", timestamp_ns);
+    const auto robot_id = GlobalInfo::instance().getRobotPrefix().id;
     pose_graph_tools::PoseGraph mst_edges;
     for (const auto& edge : mst_info.edges) {
       gtsam::Pose3 source(gtsam::Rot3(), getNodePosition(places, edge.source));
@@ -111,7 +104,13 @@ void addPlacesToDeformationGraph(const DynamicSceneGraph& graph,
       pose_graph_tools::PoseGraphEdge mst_e;
       mst_e.key_from = edge.source;
       mst_e.key_to = edge.target;
+      mst_e.robot_from = robot_id;
+      mst_e.robot_to = robot_id;
+      // TODO(nathan) this should technically be something else
+      mst_e.type = pose_graph_tools::PoseGraphEdge::Type::MESH;
+      mst_e.stamp_ns = 0;
       mst_e.pose = source.between(target).matrix();
+      mst_e.covariance.setIdentity();
       mst_edges.edges.push_back(mst_e);
     }
 

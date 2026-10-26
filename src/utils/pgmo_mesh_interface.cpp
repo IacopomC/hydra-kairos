@@ -88,7 +88,6 @@ kimera_pgmo::MeshInterface::Ptr PgmoMeshLayerInterface::clone() const {
 }
 
 PgmoMeshInterface::PgmoMeshInterface(const Mesh& mesh) : mesh_(mesh) {
-  // A single flat mesh has no block grid, so expose it as one synthetic block.
   block_indices_ = {BlockIndex(0, 0, 0)};
 }
 

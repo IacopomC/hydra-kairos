@@ -35,53 +35,33 @@
 #pragma once
 #include "hydra/common/dsg_types.h"
 
-/**
- * @file minimum_spanning_tree.h
- * @brief Computes a minimum spanning tree over a scene graph layer, where edge weight is
- *        the Euclidean distance between the connected node positions. The result lists
- *        the chosen edges along with each node's degree and the set of leaf nodes.
- */
-
 namespace hydra {
 
-/// @brief A weighted edge between two nodes, ordered by distance for heap use.
 struct MinimalEdge {
-  NodeId source;    ///< Source node id.
-  NodeId target;    ///< Target node id.
-  double distance;  ///< Edge weight (Euclidean distance between endpoints).
+  NodeId source;
+  NodeId target;
+  double distance;
 
-  /// @brief Construct a default, unset edge.
   MinimalEdge() = default;
 
-  /// @brief Construct an edge with explicit endpoints and weight.
   MinimalEdge(NodeId source, NodeId target, double distance)
       : source(source), target(target), distance(distance) {}
 
-  /// @brief Order by distance so a min-heap can be built with std::greater.
   inline bool operator>(const MinimalEdge& other) const {
     return distance > other.distance;
   }
 };
 
-/// @brief Result of a minimum spanning tree computation.
 struct MinimumSpanningTreeInfo {
-  std::vector<MinimalEdge> edges;             ///< Edges selected for the spanning tree.
-  std::unordered_set<NodeId> leaves;          ///< Nodes with degree one in the tree.
-  std::unordered_map<NodeId, size_t> counts;  ///< Degree of each node within the tree.
+  std::vector<MinimalEdge> edges;
+  std::unordered_set<NodeId> leaves;
+  std::unordered_map<NodeId, size_t> counts;
 };
 
-/// @brief Predicate selecting which layer edges may participate in the tree.
 using EdgeFilter = std::function<bool(const SceneGraphLayer&, const SceneGraphEdge&)>;
 
-/// @brief Compute the minimum spanning tree over all edges of a layer.
-/// @param layer Layer whose nodes and edges define the graph.
-/// @return The selected edges, node degrees and leaf set.
 MinimumSpanningTreeInfo getMinimumSpanningEdges(const SceneGraphLayer& layer);
 
-/// @brief Compute the minimum spanning tree using only edges accepted by the filter.
-/// @param layer Layer whose nodes and edges define the graph.
-/// @param func Predicate that accepts or rejects each candidate edge.
-/// @return The selected edges, node degrees and leaf set.
 MinimumSpanningTreeInfo getMinimumSpanningEdges(const SceneGraphLayer& layer,
                                                 const EdgeFilter& func);
 

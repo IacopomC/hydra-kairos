@@ -33,14 +33,6 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-
-/**
- * @file input_packet.h
- * @brief One frame of raw input as received: the timestamp, the body pose in the
- *        world frame, and the sensor measurement. fillInputData() converts it
- *        into the processed InputData the rest of the pipeline consumes.
- */
-
 #include <Eigen/Geometry>
 #include <list>
 
@@ -50,22 +42,18 @@ namespace hydra {
 
 struct InputData;
 
-/// @brief A single timestamped input frame: the body pose and the sensor packet.
 struct InputPacket {
   using Ptr = std::shared_ptr<InputPacket>;
 
-  uint64_t timestamp_ns;  ///< Acquisition time of the frame (ns).
+  uint64_t timestamp_ns;
 
-  SensorInputPacket::Ptr sensor_input;   ///< The sensor measurement for this frame.
-  Eigen::Vector3d world_t_body;          ///< Body position in the world frame.
-  Eigen::Quaterniond world_R_body;       ///< Body orientation in the world frame.
+  SensorInputPacket::Ptr sensor_input;
+  Eigen::Vector3d world_t_body;
+  Eigen::Quaterniond world_R_body;
 
   virtual ~InputPacket() = default;
-
-  /// @brief Convert this raw packet into processed @p data (returns false on failure).
   virtual bool fillInputData(InputData& data) const;
 
-  /// @brief The body-to-world transform built from the position and orientation.
   Eigen::Isometry3d world_T_body() const {
     return Eigen::Translation<double, 3>(world_t_body) * world_R_body;
   }

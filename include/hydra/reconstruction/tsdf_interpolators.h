@@ -33,14 +33,6 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-
-/**
- * @file tsdf_interpolators.h
- * @brief Resampling of a TSDF layer onto a coarser grid. Defines the
- *        TsdfInterpolator interface and a downsampling implementation, selected
- *        at runtime through the config factory.
- */
-
 #include <config_utilities/factory.h>
 
 #include <memory>
@@ -49,28 +41,21 @@
 
 namespace hydra {
 
-/// @brief Interface for resampling a TSDF layer into a new layer.
 struct TsdfInterpolator {
   virtual ~TsdfInterpolator() = default;
 
-  /// @brief Resample @p input, optionally restricted to @p blocks.
-  /// @param input Source TSDF layer.
-  /// @param blocks Block indices to limit the operation to, or null for all.
-  /// @return The resampled layer.
   virtual std::shared_ptr<TsdfLayer> interpolate(const TsdfLayer& input,
                                                  const BlockIndices* blocks) const = 0;
 
-  /// @brief Resample the whole @p input layer.
   std::shared_ptr<TsdfLayer> interpolate(const TsdfLayer& input) const {
     return interpolate(input, nullptr);
   }
 };
 
-/// @brief Interpolator that downsamples the TSDF by an integer block ratio.
 struct DownsampleTsdfInterpolator : public TsdfInterpolator {
   struct Config {
-    size_t ratio = 2;          ///< Downsampling factor along each axis.
-    float tolerance = 1.0e-10; ///< Numerical tolerance for combining voxels.
+    size_t ratio = 2;
+    float tolerance = 1.0e-10;
   } const config;
 
   explicit DownsampleTsdfInterpolator(const Config& config);

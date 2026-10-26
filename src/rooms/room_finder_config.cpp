@@ -69,7 +69,7 @@ void declare_config(RoomFinderConfig& conf) {
   field(conf.dilation_diff_threshold_m, "dilation_diff_threshold_m", "m");
   field(conf.log_filtrations, "log_filtrations");
   field(conf.log_place_graphs, "log_place_graphs");
-  // TODO: checks
+  // TODO(nathan) checks
 }
 
 }  // namespace hydra

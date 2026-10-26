@@ -45,17 +45,8 @@
 #include "hydra/input/input_packet.h"
 #include "hydra/reconstruction/volumetric_map.h"
 
-/**
- * @file active_window_module.h
- * @brief Pipeline module that maintains a moving spatial window of the
- *        volumetric map: it spins on input packets, lets a subclass update the
- *        map, and archives blocks that fall out of the window.
- */
-
 namespace hydra {
 
-/// @brief Base module owning the windowed volumetric map and its spin loop.
-/// Subclasses implement spinOnce() to fuse each input packet into the map.
 class ActiveWindowModule : public Module {
  public:
   using Ptr = std::shared_ptr<ActiveWindowModule>;
@@ -64,12 +55,14 @@ class ActiveWindowModule : public Module {
   using Sink = OutputSink<uint64_t, const VolumetricMap&, const ActiveWindowOutput&>;
 
   struct Config {
-    size_t max_input_queue_size;  ///< Cap on the input queue; 0 is unbounded.
-    VolumetricMap::Config volumetric_map;  ///< Configuration of the underlying volumetric map.
-    config::VirtualConfig<VolumetricWindow> map_window;  ///< The window policy deciding which blocks stay active.
-    std::vector<Sink::Factory> sinks;  ///< Factories for output sinks observing each update.
+    size_t max_input_queue_size;
+    VolumetricMap::Config volumetric_map;
+    config::VirtualConfig<VolumetricWindow> map_window;
+    std::vector<Sink::Factory> sinks;
+    //! Check whether or not the spark_dsg::Mesh fields agree with the map
+    bool validate_mesh_fields = true;
 
-    /// @brief Construct defaults; flags let downstream modules opt into semantics/tracking layers.
+    // construct to allow downstream modules to set defaults
     Config(bool with_semantics = true, bool with_tracking = false);
   } const config;
 
@@ -77,48 +70,36 @@ class ActiveWindowModule : public Module {
 
   virtual ~ActiveWindowModule() = default;
 
-  /// @brief Launch the spin thread.
   void start() override;
 
-  /// @brief Signal shutdown and join the spin thread.
   void stop() override;
 
-  /// @brief Persist module state under the given log setup.
-  void save(const LogSetup& log_setup) override;
-
-  /// @brief Return a human-readable summary of module state.
   std::string printInfo() const override;
 
-  /// @brief Spin loop: pull input packets and process them until shutdown.
   void spin();
 
-  /// @brief Process a single input packet; returns false if nothing was produced.
   bool step(const InputPacket::Ptr& input);
 
-  /// @brief Register a sink to observe each update.
   void addSink(const Sink::Ptr& sink);
 
-  /// @brief Access the input queue (for the upstream producer to push to).
   InputQueue::Ptr queue() const { return input_queue_; }
 
-  /// @brief Access the current volumetric map.
   const VolumetricMap& map() const { return map_; }
 
  protected:
-  /// @brief Fuse one input packet into the map and emit an output; supplied by the subclass.
   virtual ActiveWindowOutput::Ptr spinOnce(const InputPacket& input) = 0;
 
   void stopImpl();
 
-  InputQueue::Ptr input_queue_;   ///< Queue of incoming input packets.
-  OutputQueue::Ptr output_queue_; ///< Queue of emitted active-window outputs.
-  std::atomic<bool> should_shutdown_{false};  ///< Set to break the spin loop.
-  std::unique_ptr<std::thread> spin_thread_;   ///< The background spin thread.
+  InputQueue::Ptr input_queue_;
+  OutputQueue::Ptr output_queue_;
+  std::atomic<bool> should_shutdown_{false};
+  std::unique_ptr<std::thread> spin_thread_;
 
-  Sink::List sinks_;  ///< Registered output sinks.
+  Sink::List sinks_;
 
-  VolumetricMap map_;  ///< The windowed volumetric map.
-  std::unique_ptr<VolumetricWindow> map_window_;  ///< The active window policy instance.
+  VolumetricMap map_;
+  std::unique_ptr<VolumetricWindow> map_window_;
 };
 
 void declare_config(ActiveWindowModule::Config& config);

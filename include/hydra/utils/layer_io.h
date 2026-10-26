@@ -45,15 +45,6 @@
 #include "hydra/places/gvd_voxel.h"
 #include "hydra/reconstruction/voxel_types.h"
 
-/**
- * @file layer_io.h
- * @brief Binary serialization for voxel layers. Templated helpers write and read voxels,
- *        blocks and whole layers, with per-type specializations for the TSDF, semantic
- *        and GVD voxel formats. Public save and load entry points handle the on-disk
- *        file, prepending a layer-type tag so loads can be validated against the
- *        requested layer type.
- */
-
 namespace hydra::io {
 
 namespace internal {
@@ -62,17 +53,9 @@ using spark_dsg::serialization::BinaryDeserializer;
 using spark_dsg::serialization::BinarySerializer;
 using spatial_hash::VoxelLayer;
 
-/// @brief Tag identifying which voxel layer format a serialized stream holds.
-enum class LayerType : uint8_t {
-  INVALID,   ///< Unknown or unsupported layer type.
-  TSDF,      ///< Truncated signed distance field layer.
-  SEMANTIC,  ///< Semantic label layer.
-  GVD        ///< Generalized Voronoi diagram layer.
-};
+// Layer types.
+enum class LayerType : uint8_t { INVALID, TSDF, SEMANTIC, GVD };
 
-/// @brief Map a layer type to its LayerType tag at compile time.
-/// @tparam LayerT Layer type to classify.
-/// @return The matching tag, or LayerType::INVALID if unsupported.
 template <typename LayerT>
 LayerType getLayerType() {
   if constexpr (std::is_same_v<LayerT, TsdfLayer>) {
@@ -85,7 +68,6 @@ LayerType getLayerType() {
   return LayerType::INVALID;
 }
 
-/// @brief Render a layer type tag as a lowercase name for logging.
 inline std::string toString(LayerType type) {
   switch (type) {
     case LayerType::TSDF:
@@ -99,10 +81,7 @@ inline std::string toString(LayerType type) {
   }
 }
 
-/// @brief Write a single voxel to the serializer.
-/// The unspecialized template logs an error and fails; each supported voxel type
-/// provides its own specialization.
-/// @return True on success, false if the voxel type has no serialization.
+// Serialize voxels.
 template <typename VoxelT>
 bool serializeVoxel(BinarySerializer& /* serializer */, const VoxelT& /* voxel */) {
   LOG(ERROR) << "No serialization function for voxel type " << typeid(VoxelT).name()
@@ -110,10 +89,6 @@ bool serializeVoxel(BinarySerializer& /* serializer */, const VoxelT& /* voxel *
   return false;
 }
 
-/// @brief Read a single voxel from the deserializer.
-/// The unspecialized template logs an error and fails; each supported voxel type
-/// provides its own specialization.
-/// @return True on success, false if the voxel type has no deserialization.
 template <typename VoxelT>
 bool deserializeVoxel(BinaryDeserializer& /* deserializer */, VoxelT& /* voxel */) {
   LOG(ERROR) << "No deserialization function for voxel type " << typeid(VoxelT).name()
@@ -187,8 +162,7 @@ inline bool deserializeVoxel(BinaryDeserializer& deserializer,
   return true;
 }
 
-/// @brief Write a block's index, update flag and every voxel it contains.
-/// @return True on success, false if a voxel failed to serialize.
+// Serialize a Blocks.
 template <typename BlockT>
 bool serializeBlock(BinarySerializer& serializer, const BlockT& block) {
   // Block config.
@@ -205,8 +179,6 @@ bool serializeBlock(BinarySerializer& serializer, const BlockT& block) {
   return true;
 }
 
-/// @brief Read a block from the stream and allocate it into the layer.
-/// @return True on success, false if a voxel failed to deserialize.
 template <typename BlockT>
 bool deserializeBlock(BinaryDeserializer& deserializer, VoxelLayer<BlockT>& layer) {
   // Block config.
@@ -225,8 +197,7 @@ bool deserializeBlock(BinaryDeserializer& deserializer, VoxelLayer<BlockT>& laye
   return true;
 }
 
-/// @brief Block serialization specialization for TsdfBlock, which carries extra mesh and
-/// ESDF update flags beyond the base block fields.
+// Specialization for TsdfBlock which has extra fields.
 template <>
 inline bool serializeBlock(BinarySerializer& serializer, const TsdfBlock& block) {
   if (!serializeBlock<spatial_hash::VoxelBlock<TsdfVoxel>>(serializer, block)) {
@@ -237,8 +208,6 @@ inline bool serializeBlock(BinarySerializer& serializer, const TsdfBlock& block)
   return true;
 }
 
-/// @brief Block deserialization specialization for TsdfBlock, reading the extra mesh and
-/// ESDF update flags after the base block fields.
 template <>
 inline bool deserializeBlock(BinaryDeserializer& deserializer,
                              VoxelLayer<TsdfBlock>& layer) {
@@ -260,9 +229,7 @@ inline bool deserializeBlock(BinaryDeserializer& deserializer,
   return true;
 }
 
-/// @brief Write a whole voxel layer: its type tag, voxel geometry, block count and every
-/// block.
-/// @return True on success, false if the layer type is unsupported or a block fails.
+// Serialize a VoxelLayer to Binary.
 template <typename LayerT>
 bool serializeLayer(BinarySerializer& serializer, const LayerT& layer) {
   // Layer config.
@@ -287,8 +254,6 @@ bool serializeLayer(BinarySerializer& serializer, const LayerT& layer) {
   return true;
 }
 
-/// @brief Read a whole voxel layer, validating that the stored type tag matches LayerT.
-/// @return The reconstructed layer, or nullptr on a type mismatch or read failure.
 template <typename LayerT>
 typename LayerT::Ptr deserializeLayer(BinaryDeserializer& deserializer) {
   // Layer config.
@@ -330,13 +295,15 @@ typename LayerT::Ptr deserializeLayer(BinaryDeserializer& deserializer) {
 
 }  // namespace internal
 
-/// @brief Write a voxel layer to a file in binary form.
-/// A ".layer" extension is appended when the path has none. Mesh layers are not voxel
-/// layers and are not handled here.
-/// @tparam LayerT The voxel layer type being saved.
-/// @param filepath The file to write to, including full path and optionally extension.
-/// @param layer The layer to save.
-/// @return True if the layer was saved successfully.
+/**
+ * @brief Write a VoxelLayer to a file.
+ * NOTE(lschmid): The mesh layer is not a VoxelLayer, can write separate serialization
+ * code for that if needed.
+ * @param filepath The file to write to, including full path and optionally extension.
+ * @param layer The layer to save.
+ * @return True if the layer was saved successfully.
+ * @tparam BlockT The type of the blocks in the layer.
+ */
 template <typename LayerT>
 bool saveLayer(std::string filepath,
                const spatial_hash::VoxelLayer<typename LayerT::BlockType>& layer) {
@@ -363,12 +330,14 @@ bool saveLayer(std::string filepath,
   return true;
 }
 
-/// @brief Load a voxel layer from a binary file.
-/// A ".layer" extension is appended when the path has none. Mesh layers are not voxel
-/// layers and are not handled here.
-/// @tparam LayerT The voxel layer type expected in the file.
-/// @param filepath The file to read from, including full path and optionally extension.
-/// @return The loaded layer, or nullptr if the file could not be read.
+/**
+ * @brief Load a VoxelLayer from a file.
+ * NOTE(lschmid): The mesh layer is not a VoxelLayer, can write separate serialization
+ * code for that if needed.
+ * @param filepath The file to read from, including full path and optionally extension.
+ * @return The loaded layer or nullptr if the file could not be read.
+ * @tparam BlockT The type of the blocks in the layer.
+ */
 template <typename LayerT>
 std::shared_ptr<spatial_hash::VoxelLayer<typename LayerT::BlockType>> loadLayer(
     std::string filepath) {

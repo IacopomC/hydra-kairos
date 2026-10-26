@@ -40,50 +40,37 @@
 
 #include "hydra/common/dsg_types.h"
 
-/**
- * @file robot_footprint_integrator.h
- * @brief Carves the robot's own footprint as free space into the volumetric
- *        map, so the body never appears as an obstacle to the distance field.
- */
-
 namespace hydra {
 
-class VolumetricMap;  ///< Forward declaration of the map being written into.
+class VolumetricMap;
 
-/// @brief Marks a body-frame bounding box as free space in the TSDF.
 class RobotFootprintIntegrator {
  public:
-  using Ptr = std::shared_ptr<RobotFootprintIntegrator>;  ///< Shared-pointer alias.
+  using Ptr = std::shared_ptr<RobotFootprintIntegrator>;
 
-  /// @brief Footprint extent and the weight used when writing it.
   struct Config {
-    Eigen::Vector3f bbox_min = Eigen::Vector3f::Zero();  ///< Lower corner of the footprint box in the body frame (m).
-    Eigen::Vector3f bbox_max = Eigen::Vector3f::Zero();  ///< Upper corner of the footprint box in the body frame (m).
-    double tsdf_weight = 1.0e-5;                         ///< Weight applied to voxels marked free.
+    Eigen::Vector3f bbox_min = Eigen::Vector3f::Zero();
+    Eigen::Vector3f bbox_max = Eigen::Vector3f::Zero();
+    double tsdf_weight = 1.0e-5;
   };
 
-  /// @brief Construct from a footprint configuration.
   RobotFootprintIntegrator(const Config& config);
 
   virtual ~RobotFootprintIntegrator();
 
-  /// @brief Mark the footprint as free space in the map at the given body pose.
-  /// @param world_T_body Transform placing the body frame in the world.
-  /// @param map Volumetric map updated in place.
   void markFreespace(const Eigen::Isometry3f& world_T_body, VolumetricMap& map) const;
 
  public:
-  const Config config;    ///< Footprint configuration.
-  const BoundingBox bbox; ///< Bounding box derived from the configured corners.
+  const Config config;
+  const BoundingBox bbox;
 
  private:
   inline static const auto registration_ =
       config::RegistrationWithConfig<RobotFootprintIntegrator,
                                      RobotFootprintIntegrator,
-                                     Config>("RobotFootprintIntegrator");  ///< Factory registration under "RobotFootprintIntegrator".
+                                     Config>("RobotFootprintIntegrator");
 };
 
-/// @brief Bind RobotFootprintIntegrator::Config fields for serialization.
 void declare_config(RobotFootprintIntegrator::Config& config);
 
 }  // namespace hydra

@@ -32,94 +32,54 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
-/**
- * @file gnn_descriptors.h
- * @brief Descriptor factories that encode a node's neighborhood with a learned
- *        graph neural network. The object and place variants build a feature
- *        tensor from the surrounding subgraph and run it through a model to
- *        produce the descriptor values.
- */
 #pragma once
 #include "hydra/gnn/gnn_interface.h"
 #include "hydra/loop_closure/scene_graph_descriptors.h"
 
 namespace hydra::lcd {
 
-/// @brief Builds object-layer descriptors by running a graph network over the
-/// objects around a node, with each object encoded by its label embedding.
 struct ObjectGnnDescriptor : DescriptorFactory {
-  using LabelEmbeddings = std::map<uint8_t, Eigen::VectorXf>;  ///< Per-label feature vectors keyed by semantic label.
+  using LabelEmbeddings = std::map<uint8_t, Eigen::VectorXf>;
 
-  /// @brief Construct the factory and load its model.
-  /// @param model_path Path to the serialized graph network.
-  /// @param config Subgraph extraction settings for gathering nearby objects.
-  /// @param max_edge_distance_m Maximum spacing for an edge between two nodes in the input graph.
-  /// @param label_embeddings Feature vector for each semantic label.
-  /// @param use_pos_in_feature Append node position to each node feature when true.
   ObjectGnnDescriptor(const std::string& model_path,
                       const SubgraphConfig& config,
                       double max_edge_distance_m,
                       const LabelEmbeddings& label_embeddings,
                       bool use_pos_in_feature = true);
 
-  /// @brief Assemble the model input tensors from a set of nodes.
-  /// @param graph Scene graph supplying node attributes and positions.
-  /// @param nodes Nodes that make up the subgraph.
-  /// @return Named tensors of node features and edges for the model.
   gnn::TensorMap makeInput(const DynamicSceneGraph& graph,
                            const std::set<NodeId>& nodes) const;
 
-  /// @brief Build an object descriptor for the neighborhood of a node.
-  /// @param graph Scene graph supplying the object neighborhood.
-  /// @param agent_node Node at the center of the neighborhood.
-  /// @return The model-produced descriptor.
   Descriptor::Ptr construct(const DynamicSceneGraph& graph,
                             const DynamicSceneGraphNode& agent_node) const override;
 
  protected:
-  const SubgraphConfig config_;                  ///< Subgraph extraction settings.
-  std::unique_ptr<gnn::GnnInterface> model_;     ///< Loaded graph network.
+  const SubgraphConfig config_;
+  std::unique_ptr<gnn::GnnInterface> model_;
 
-  double max_edge_distance_m_;                   ///< Maximum spacing for an input-graph edge.
-  size_t label_embedding_size_;                  ///< Dimension of each label embedding.
-  std::map<uint8_t, Eigen::VectorXf> label_embeddings_;  ///< Feature vector per semantic label.
-  const bool use_pos_in_feature_;                ///< Whether node position is appended to features.
+  double max_edge_distance_m_;
+  size_t label_embedding_size_;
+  std::map<uint8_t, Eigen::VectorXf> label_embeddings_;
+  const bool use_pos_in_feature_;
 };
 
-/// @brief Builds place-layer descriptors by running a graph network over the
-/// places around a node.
 struct PlaceGnnDescriptor : DescriptorFactory {
-  /// @brief Construct the factory and load its model.
-  /// @param model_path Path to the serialized graph network.
-  /// @param config Subgraph extraction settings for gathering nearby places.
-  /// @param use_pos_in_feature Append node position to each node feature when true.
   PlaceGnnDescriptor(const std::string& model_path,
                      const SubgraphConfig& config,
                      bool use_pos_in_feature = true);
 
-  /// @brief Assemble the model input tensors from a set of nodes.
-  /// @param graph Scene graph supplying node attributes and positions.
-  /// @param nodes Nodes that make up the subgraph.
-  /// @return Named tensors of node features and edges for the model.
   gnn::TensorMap makeInput(const DynamicSceneGraph& graph,
                            const std::set<NodeId>& nodes) const;
 
-  /// @brief Build a place descriptor for the neighborhood of a node.
-  /// @param graph Scene graph supplying the place neighborhood.
-  /// @param agent_node Node at the center of the neighborhood.
-  /// @return The model-produced descriptor.
   Descriptor::Ptr construct(const DynamicSceneGraph& graph,
                             const DynamicSceneGraphNode& agent_node) const override;
 
  protected:
-  const SubgraphConfig config_;               ///< Subgraph extraction settings.
-  const bool use_pos_in_feature_;             ///< Whether node position is appended to features.
-  std::unique_ptr<gnn::GnnInterface> model_;  ///< Loaded graph network.
+  const SubgraphConfig config_;
+  const bool use_pos_in_feature_;
+  std::unique_ptr<gnn::GnnInterface> model_;
 };
 
-/// @brief Load semantic-label embeddings from a file.
-/// @param filename Path to the embeddings file.
-/// @return The embedding vector for each label.
 ObjectGnnDescriptor::LabelEmbeddings loadLabelEmbeddings(const std::string& filename);
 
 }  // namespace hydra::lcd

@@ -47,13 +47,6 @@
 // purposes notwithstanding any copyright notation herein.
 #pragma once
 
-/**
- * @file sensor_utilities.h
- * @brief Free helpers for sensor-driven block selection: approximate
- *        view-frustum tests for blocks, finding the blocks potentially visible
- *        from a sensor pose, and building a range image from a point cloud.
- */
-
 #include <opencv2/core/mat.hpp>
 
 #include "hydra/input/sensor.h"
@@ -61,35 +54,42 @@
 
 namespace hydra {
 
-/// @brief Approximate test (no occlusion check) of whether a block is in the
-/// sensor's view frustum.
-/// @param block_index Index of the block to check.
-/// @param T_C_B Transform from the block (B) frame to the camera (C) frame.
-/// @param block_size Block edge length (m).
-/// @param block_diag_half Half the block's diagonal length (m).
-/// @return True if the block can be in the view frustum.
+/**
+ * @brief Checks if a block is in the camera's view frustum. Approximate check that
+ * does not check for occlusion.
+ * @param block_index Index of the block to check.
+ * @param T_C_B Transform from Block (B) frame to the Camera (C) frame.
+ * @param block_size Size of the block in meters.
+ * @param block_diag_half Half the length of the block's diagonal in meters.
+ * @return True if the block can be in the camera's view frustum.
+ */
 bool blockIsInViewFrustum(const Sensor& sensor,
                           const BlockIndex& block_index,
                           const Eigen::Isometry3f& T_C_B,
                           float block_size,
                           float block_diag_half);
 
-/// @brief Approximate test (no occlusion check) of whether a block is in the
-/// sensor's view frustum.
-/// @param block Block to check.
-/// @param T_C_B Transform from the block (B) frame to the camera (C) frame.
-/// @return True if the block can be in the view frustum.
+/**
+ * @brief Checks if a block is in the camera's view frustum. Approximate check that
+ * does not check for occlusion.
+ * @param block Block to be checked.
+ * @param T_C_B Transform from Block (B) frame to the Camera (C) frame.
+ * @return True if the block can be in the camera's view frustum.
+ */
 bool blockIsInViewFrustum(const Sensor& sensor,
                           const spatial_hash::Block& block,
                           const Eigen::Isometry3f& T_C_B);
-
-/// @brief Find the indices of all blocks potentially visible in the view
-/// frustum (no occlusion check).
-/// @param T_W_C Transform from the camera (C) frame to the world (W) frame.
-/// @param block_size Block edge length (m).
-/// @param min_range Optional minimum search range (m).
-/// @param max_range Optional maximum search range (m).
-/// @return Block indices that could be visible in the view frustum.
+/**
+ * @brief Finds the indices of all blocks that could be visible in the camera's view
+ * frustum. Does not check for occlusion.
+ * @param T_W_C Transform from Camera (C) frame to World (W) frame.
+ * @param block_size Size of the block in meters.
+ * @param min_range Optionally specify the minimum range to search for blocks in the
+ * view in meters.
+ * @param max_range Optionally specify the maximum range to search for blocks in the
+ * view in meters.
+ * @return List of block indices that could be visible in the camera's view frustum.
+ */
 BlockIndices findBlocksInViewFrustum(
     const Sensor& sensor,
     const Eigen::Isometry3f& T_W_C,
@@ -98,10 +98,12 @@ BlockIndices findBlocksInViewFrustum(
     float max_range = std::numeric_limits<float>::max(),
     bool use_sensor_range = true);
 
-/// @brief Build a range image from a point cloud.
-/// @param points Point cloud to convert.
-/// @param min_range Optional out-param tracking the minimum range.
-/// @param max_range Optional out-param tracking the maximum range.
+/**
+ * @brief Compute range image from pointcloud
+ * @param points Pointcloud to compute range image from
+ * @param min_range Optional min range to track
+ * @param max_range Optional max range to track
+ */
 cv::Mat computeRangeImageFromPoints(const cv::Mat& points,
                                     float* min_range,
                                     float* max_range);

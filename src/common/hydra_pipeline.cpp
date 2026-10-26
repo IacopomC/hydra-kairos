@@ -34,36 +34,35 @@
  * -------------------------------------------------------------------------- */
 #include "hydra/common/hydra_pipeline.h"
 
-#include <config_utilities/settings.h>
-#include <config_utilities/config.h>
-#include <config_utilities/parsing/ros.h>
+#include <config_utilities/parsing/yaml.h>
 #include <config_utilities/printing.h>
-#include <config_utilities/validation.h>
+#include <config_utilities/settings.h>
+
+#include <stdexcept>
+
+#include "hydra/utils/timing_utilities.h"
 
 namespace hydra {
 
+using hydra::timing::ElapsedTimeRecorder;
+
 HydraPipeline::HydraPipeline(const PipelineConfig& pipeline_config,
                              int robot_id,
-                             int config_verbosity,
-                             bool freeze_global_info)
+                             int config_verbosity)
     : config_verbosity_(config_verbosity) {
-  // seed the process-wide config first; every shared graph below is built from it
-  const auto& config = GlobalInfo::init(pipeline_config, robot_id, freeze_global_info);
-  // frontend and backend each own a separate graph so they can run concurrently;
-  // the shared state holds the additional graphs the loop-closure and backend
-  // threads operate on
+  const auto& config = GlobalInfo::init(pipeline_config, robot_id);
   frontend_dsg_ = config.createSharedDsg();
   backend_dsg_ = config.createSharedDsg();
   shared_state_.reset(new SharedModuleState());
   shared_state_->lcd_graph = config.createSharedDsg();
   shared_state_->backend_graph = config.createSharedDsg();
+  LOG(INFO) << "[Hydra] Initialized pipeline with:\n" << config;
 }
 
 void HydraPipeline::init() {}
 
 HydraPipeline::~HydraPipeline() {}
 
-// format a single log banner line padded to print_width with the fill char
 std::string makeBanner(const std::string& message,
                        size_t print_width,
                        char fill,
@@ -73,8 +72,6 @@ std::string makeBanner(const std::string& message,
   if (with_header) {
     ss << std::string(print_width, fill) << std::endl;
   }
-  // account for the leading fill, two surrounding spaces, and trailing fill when
-  // computing right padding; clamp to zero if the message already overflows the width
   const auto msg_size = message.size() + 3;
   const auto spacing = msg_size >= print_width ? 0 : print_width - msg_size;
   ss << fill << " " << message << (spacing ? std::string(spacing, ' ') + fill : "")
@@ -86,14 +83,14 @@ std::string makeBanner(const std::string& message,
 }
 
 std::string HydraPipeline::getModuleInfo(const std::string& name,
-                                         const Module* module) const {
-  const auto print_width = config::Settings().print_width;
+                                         const Module* mod) const {
+  const auto print_width = config::Settings().printing.width;
   std::stringstream ss;
   ss << makeBanner(name, print_width, '*', true, true);
-  if (!module) {
+  if (!mod) {
     ss << "UNITIALIZED MODULE!" << std::endl;
   } else {
-    const auto info = module->printInfo();
+    const auto info = mod->printInfo();
     if (!info.empty()) {
       ss << info << std::endl;
     }
@@ -102,12 +99,27 @@ std::string HydraPipeline::getModuleInfo(const std::string& name,
   return ss.str();
 }
 
+void HydraPipeline::addModules(const ModuleConfigs& configs) {
+  for (const auto& [name, module_config] : configs) {
+    if (modules_.count(name)) {
+      throw std::runtime_error("Module '" + name + "' already exists!");
+    }
+
+    auto mod = module_config.create();
+    if (!mod) {
+      throw std::runtime_error("Invalid config for module '" + name + "'!");
+    }
+
+    modules_[name] = std::move(mod);
+  }
+}
+
 void HydraPipeline::showModules() const {
-  const auto print_width = config::Settings().print_width;
+  const auto print_width = config::Settings().printing.width;
   std::stringstream ss;
   ss << std::endl << makeBanner("Modules", print_width, '=', true, true);
-  for (auto&& [name, module] : modules_) {
-    ss << std::endl << getModuleInfo(name, module.get());
+  for (auto&& [name, mod] : modules_) {
+    ss << std::endl << getModuleInfo(name, mod.get());
   }
   VLOG(config_verbosity_) << ss.str();
 }
@@ -116,52 +128,68 @@ void HydraPipeline::start() {
   VLOG(config_verbosity_) << std::endl << getModuleInfo("input", input_module_.get());
   showModules();
 
-  // start the input source first so downstream modules have data to consume
   if (input_module_) {
     input_module_->start();
   }
 
-  for (auto&& [name, module] : modules_) {
-    if (!module) {
+  for (auto&& [name, mod] : modules_) {
+    if (!mod) {
       LOG(FATAL) << "Found unitialized module: " << name;
       continue;
     }
 
-    module->start();
+    mod->start();
   }
 
-  // register the input module alongside the rest so stop()/save() iterate over it too
   if (input_module_) {
     modules_["input"] = input_module_;
   }
 }
 
 void HydraPipeline::stop() {
-  for (auto&& [name, module] : modules_) {
-    if (!module) {
+  for (auto&& [name, mod] : modules_) {
+    if (!mod) {
       LOG(FATAL) << "Found unitialized module: " << name;
       continue;
     }
 
-    module->stop();
+    mod->stop();
   }
 }
 
-void HydraPipeline::save() {
-  // nothing to write without a valid log directory, so skip the whole pass
-  const auto& logs = GlobalInfo::instance().getLogs();
-  if (!logs || !logs->valid()) {
+void HydraPipeline::save(const DataDirectory& logs) const {
+  if (!logs) {
     return;
   }
 
-  for (auto&& [name, module] : modules_) {
-    if (!module) {
+  auto& info = GlobalInfo::instance();
+  auto node = config::toYaml(info.getConfig());
+  for (const auto& name : info.getAvailableSensors()) {
+    const auto sensor = info.getSensor(name);
+    if (sensor) {
+      node["sensors"][name] = info.getSensor(name)->dump();
+    }
+  }
+
+  std::filesystem::path log_dir = logs.path();
+  std::ofstream fout(log_dir / "hydra_config.yaml");
+  fout << node;
+
+  for (auto&& [name, mod] : modules_) {
+    if (!mod) {
       LOG(FATAL) << "Found unitialized module: " << name;
       continue;
     }
 
-    module->save(*logs);
+    mod->save(logs);
   }
+
+  // save timing information to avoid destructor weirdness with singletons
+  LOG(INFO) << "[Hydra] saving timing information to " << log_dir;
+  const ElapsedTimeRecorder& timer = ElapsedTimeRecorder::instance();
+  timer.logTimers(logs.path("timing"));
+  timer.logStats(log_dir / "timing_stats.csv");
+  LOG(INFO) << "[Hydra] saved timing information";
 }
 
 }  // namespace hydra

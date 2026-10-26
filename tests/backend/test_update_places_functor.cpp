@@ -48,8 +48,9 @@ MergeList callWithUnmerged(const UpdateFunctor& functor,
                            bool enable_merging) {
   const auto unmerged = dsg.graph->clone();
   functor.call(*unmerged, dsg, info);
-  if (enable_merging) {
-    return functor.findMerges(*unmerged, info);
+  const auto hooks = functor.hooks();
+  if (enable_merging && hooks.find_merges) {
+    return hooks.find_merges(*unmerged, info);
   } else {
     return {};
   }
@@ -58,22 +59,21 @@ MergeList callWithUnmerged(const UpdateFunctor& functor,
 }  // namespace
 
 TEST(UpdatePlacesFunctor, PlaceUpdate) {
-  const LayerId place_layer = DsgLayers::PLACES;
   auto dsg = test::makeSharedDsg();
   auto& graph = *dsg->graph;
 
   auto attrs1 = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
   attrs1->position = Eigen::Vector3d(1.0, 2.0, 3.0);
-  graph.emplaceNode(place_layer, NodeSymbol('p', 0), std::move(attrs1));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 0), std::move(attrs1));
 
   auto attrs2 = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
   attrs2->position = Eigen::Vector3d(1.0, 2.0, 3.0);
-  graph.emplaceNode(place_layer, NodeSymbol('p', 5), std::move(attrs2));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 5), std::move(attrs2));
 
   auto attrs3 = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
   attrs3->position = Eigen::Vector3d(1.0, 2.0, 3.0);
   attrs3->is_active = true;  // make sure it doesn't get dropped
-  graph.emplaceNode(place_layer, NodeSymbol('p', 6), std::move(attrs3));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 6), std::move(attrs3));
 
   gtsam::Values values;
   values.insert(NodeSymbol('p', 0),
@@ -81,8 +81,8 @@ TEST(UpdatePlacesFunctor, PlaceUpdate) {
   values.insert(NodeSymbol('p', 5),
                 gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(7.0, 8.0, 9.0)));
 
-  UpdateInfo::ConstPtr info(new UpdateInfo{&values, nullptr, true, 0, {}});
-  UpdatePlacesFunctor functor({0.4, 0.3});
+  UpdateInfo::ConstPtr info(new UpdateInfo{0, &values, nullptr, true, {}});
+  UpdatePlacesFunctor functor({0.4, 0.3, DeformationInterpolator::Config{}});
   callWithUnmerged(functor, *dsg, info, false);
 
   {  // first key exists: new value
@@ -105,22 +105,21 @@ TEST(UpdatePlacesFunctor, PlaceUpdate) {
 }
 
 TEST(UpdatePlacesFunctor, PlaceUpdateNodeFinderBug) {
-  const LayerId place_layer = DsgLayers::PLACES;
   auto dsg = test::makeSharedDsg();
   auto& graph = *dsg->graph;
 
   auto attrs1 = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
   attrs1->position = Eigen::Vector3d(1.0, 2.0, 3.0);
-  graph.emplaceNode(place_layer, NodeSymbol('p', 0), std::move(attrs1));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 0), std::move(attrs1));
 
   auto attrs2 = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
   attrs2->position = Eigen::Vector3d(1.0, 2.0, 3.0);
-  graph.emplaceNode(place_layer, NodeSymbol('p', 5), std::move(attrs2));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 5), std::move(attrs2));
 
   auto attrs3 = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
   attrs3->position = Eigen::Vector3d(1.0, 2.0, 3.0);
   attrs3->is_active = true;  // make sure it doesn't get dropped
-  graph.emplaceNode(place_layer, NodeSymbol('p', 6), std::move(attrs3));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 6), std::move(attrs3));
 
   gtsam::Values values;
   values.insert(NodeSymbol('p', 0),
@@ -128,8 +127,8 @@ TEST(UpdatePlacesFunctor, PlaceUpdateNodeFinderBug) {
   values.insert(NodeSymbol('p', 5),
                 gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(7.0, 8.0, 9.0)));
 
-  UpdateInfo::ConstPtr info(new UpdateInfo{&values, nullptr, false, 0, {}});
-  UpdatePlacesFunctor functor({0.4, 0.3});
+  UpdateInfo::ConstPtr info(new UpdateInfo{0, &values, nullptr, false, {}});
+  UpdatePlacesFunctor functor({0.4, 0.3, DeformationInterpolator::Config{}});
   // initialize node finder
   callWithUnmerged(functor, *dsg, info, false);
 
@@ -140,7 +139,6 @@ TEST(UpdatePlacesFunctor, PlaceUpdateNodeFinderBug) {
 }
 
 TEST(UpdatePlacesFunctor, PlaceUpdateMerge) {
-  const LayerId place_layer = DsgLayers::PLACES;
   auto dsg = test::makeSharedDsg();
   auto& graph = *dsg->graph;
 
@@ -157,9 +155,9 @@ TEST(UpdatePlacesFunctor, PlaceUpdateMerge) {
   attrs6->distance = 1.0;
   attrs6->is_active = true;
 
-  graph.emplaceNode(place_layer, NodeSymbol('p', 0), std::move(attrs0));
-  graph.emplaceNode(place_layer, NodeSymbol('p', 5), std::move(attrs5));
-  graph.emplaceNode(place_layer, NodeSymbol('p', 6), std::move(attrs6));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 0), std::move(attrs0));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 5), std::move(attrs5));
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 6), std::move(attrs6));
 
   gtsam::Values values;
   values.insert(NodeSymbol('p', 0),
@@ -169,8 +167,8 @@ TEST(UpdatePlacesFunctor, PlaceUpdateMerge) {
   values.insert(NodeSymbol('p', 6),
                 gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(7.0, 8.0, 9.0)));
 
-  UpdateInfo::ConstPtr info(new UpdateInfo{&values, nullptr, true, 0, {}});
-  UpdatePlacesFunctor functor({0.4, 0.3});
+  UpdateInfo::ConstPtr info(new UpdateInfo{0, &values, nullptr, true, {}});
+  UpdatePlacesFunctor functor({0.4, 0.3, DeformationInterpolator::Config{}});
   const auto result_merges = callWithUnmerged(functor, *dsg, info, true);
 
   {  // first key exists: new value
@@ -188,6 +186,30 @@ TEST(UpdatePlacesFunctor, PlaceUpdateMerge) {
   // node p6 proposed for merge with node p5
   MergeList expected{{"p6"_id, "p5"_id}};
   EXPECT_EQ(result_merges, expected);
+}
+
+TEST(UpdatePlacesFunctor, PlaceUpdateKeepsMetadata) {
+  auto dsg = test::makeSharedDsg();
+  auto& graph = *dsg->graph;
+
+  auto attrs = std::make_unique<PlaceNodeAttributes>(0.0, 0.0);
+  attrs->position = Eigen::Vector3d(1.0, 2.0, 3.0);
+  graph.emplaceNode(DsgLayers::PLACES, NodeSymbol('p', 0), std::move(attrs));
+  const auto unmerged = graph.clone();
+
+  // metadata written to the merged graph by another functor
+  graph.getNode(NodeSymbol('p', 0)).attributes().metadata.set({{"flow", 1.5}});
+
+  gtsam::Values values;
+  values.insert(NodeSymbol('p', 0),
+                gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(4.0, 5.0, 6.0)));
+  UpdateInfo::ConstPtr info(new UpdateInfo{0, &values, nullptr, true, {}});
+  UpdatePlacesFunctor functor({0.4, 0.3, DeformationInterpolator::Config{}});
+  functor.call(*unmerged, *dsg, info);
+
+  const auto& result = graph.getNode(NodeSymbol('p', 0)).attributes();
+  EXPECT_NEAR(0.0, (result.position - Eigen::Vector3d(4.0, 5.0, 6.0)).norm(), 1.0e-7);
+  EXPECT_EQ(result.metadata().value("flow", 0.0), 1.5);
 }
 
 }  // namespace hydra

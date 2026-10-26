@@ -34,48 +34,39 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 #include <hydra/odometry/pose_graph_tracker.h>
-#include <chrono>
 
-/**
- * @file pose_graph_from_odom.h
- * @brief Pose-graph tracker that builds odometry edges directly from incoming
- *        body poses, emitting a new node only once the pose has moved far enough
- *        in space and time since the last accepted one.
- */
+#include <chrono>
 
 namespace hydra {
 
-/// @brief A body pose tagged with its timestamp.
 struct StampedPose {
-  std::chrono::nanoseconds stamp;  ///< Pose timestamp.
-  Eigen::Isometry3d pose;          ///< Body pose in the world frame.
+  std::chrono::nanoseconds stamp;
+  Eigen::Isometry3d pose;
 };
 
-/// @brief Tracker that emits a single odometry edge between successive accepted poses.
 class PoseGraphFromOdom : public PoseGraphTracker {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
   struct Config {
-    double min_pose_separation = 0.5;  ///< Minimum weighted pose change to add a new node (m).
-    double rotation_separation_weight = 0.1;  ///< Weight on rotation (Frobenius) norm relative to translation (L2) norm.
-    double min_time_separation_s = 0.2;  ///< Minimum elapsed time to add a new node (s).
+    //! @brief Minimum between pose norm to add new pose graph node
+    double min_pose_separation = 0.5;
+    //! @brief Weighting between rotation (frobenius) norm and translation (l2) norm
+    double rotation_separation_weight = 0.1;
+    //! @brief Minimum time separation to add new pose graph node
+    double min_time_separation_s = 0.2;
   } const config;
 
   explicit PoseGraphFromOdom(const Config& config);
 
   ~PoseGraphFromOdom() = default;
 
-  /// @brief Add the pose if it clears the time and separation thresholds, returning the edge to the previous node.
-  /// @param timestamp_ns Pose timestamp (ns).
-  /// @param world_T_body Body pose in the world frame.
-  /// @return Packet with one two-node pose graph, or empty if the pose was dropped.
   PoseGraphPacket update(uint64_t timestamp_ns,
                          const Eigen::Isometry3d& world_T_body) override;
 
  protected:
-  size_t num_poses_received_;  ///< Count of poses accepted so far; also the next node index.
-  StampedPose prev_pose_;      ///< Last accepted pose, the source end of the next edge.
+  size_t num_poses_received_;
+  StampedPose prev_pose_;
 };
 
 void declare_config(PoseGraphFromOdom::Config& config);

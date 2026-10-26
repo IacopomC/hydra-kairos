@@ -46,8 +46,6 @@ DoubleMap QuaternionConverter::toIntermediate(const Eigen::Quaterniond& other,
 void QuaternionConverter::fromIntermediate(const DoubleMap& other,
                                            Eigen::Quaterniond& value,
                                            std::string& error) {
-  // all four components are required; reject the parse rather than default-filling
-  // missing ones, which would silently produce a wrong rotation
   if (!other.count("w") || !other.count("x") || !other.count("y") ||
       !other.count("z")) {
     error = "Encountered invalid quaternion representation!";

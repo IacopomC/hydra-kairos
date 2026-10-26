@@ -89,29 +89,21 @@ void declare_config(Camera::Config& config) {
 Camera::Camera(const Config& config, const std::string& name)
     : Sensor(config, name), config_(config::checkValid(config)) {
   // Pre-compute the view frustum (top, right, bottom, left, plane normals).
-  // Each row stores the inward normal of one side plane. Image corners are
-  // expressed as 3D rays in the camera frame (anisotropic pixels are accounted
-  // for by scaling the y axis with fx/fy), and the cross product of two adjacent
-  // corner rays gives the plane spanned by the frustum edge through the origin.
   const auto scale_factor = config_.fx / config_.fy;
-  // Top edge: ray to top-left corner crossed with ray to top-right corner.
   Eigen::Vector3f p1(-config_.cx, -config_.cy * scale_factor, config_.fx);
   Eigen::Vector3f p2(
       config_.width - config_.cx, -config_.cy * scale_factor, config_.fx);
   view_frustum_.row(0) = p1.cross(p2).normalized();
 
-  // Right edge: top-right corner crossed with bottom-right corner.
   p1 = Eigen::Vector3f(config_.width - config_.cx,
                        (config_.height - config_.cy) * scale_factor,
                        config_.fx);
   view_frustum_.row(1) = p2.cross(p1).normalized();
 
-  // Bottom edge: bottom-right corner crossed with bottom-left corner.
   p2 = Eigen::Vector3f(
       -config_.cx, (config_.height - config_.cy) * scale_factor, config_.fx);
   view_frustum_.row(2) = p1.cross(p2).normalized();
 
-  // Left edge: bottom-left corner crossed with top-left corner.
   p1 = Eigen::Vector3f(-config_.cx, -config_.cy * scale_factor, config_.fx);
   view_frustum_.row(3) = p2.cross(p1).normalized();
 }
@@ -123,21 +115,17 @@ float Camera::computeRayDensity(float voxel_size, float depth) const {
 }
 
 bool Camera::finalizeRepresentations(InputData& input, bool force_world_frame) const {
-  // If a pointcloud was already supplied we only need the radial range image.
   if (!input.vertex_map.empty()) {
     input.range_image = computeRangeImageFromPoints(
         input.vertex_map, &input.min_range, &input.max_range);
-    // TODO: depth image?
+    // TODO(nathan) depth image?
     return true;
   }
 
-  // Otherwise a depth image is required to back-project into a pointcloud.
   if (input.depth_image.empty()) {
     return false;
   }
 
-  // Back-project depth into 3D points. When requested, transform them straight
-  // into the world frame so downstream stages do not need the sensor pose.
   const auto world_T_camera = input.getSensorPose().cast<float>();
   input.vertex_map = computeVertexMap(input.depth_image,
                                       force_world_frame ? &world_T_camera : nullptr);
@@ -153,14 +141,12 @@ bool Camera::finalizeRepresentations(InputData& input, bool force_world_frame) c
 bool Camera::projectPointToImagePlane(const Eigen::Vector3f& p_C,
                                       float& u,
                                       float& v) const {
-  // Points behind or on the image plane cannot be projected.
   if (p_C.z() <= 0.f) {
     return false;
   }
 
   // all points are considered valid as long as the are contained in the image plane
   // with bounds [0, w] x [0, h]
-  // Pinhole projection: scale by focal length, divide by depth, shift by principal point.
   u = p_C.x() * config_.fx / p_C.z() + config_.cx;
   if (u > config_.width || u < 0) {
     return false;
@@ -183,8 +169,6 @@ bool Camera::projectPointToImagePlane(const Eigen::Vector3f& p_C,
     return false;
   }
 
-  // Floor to a pixel index and re-check bounds: the float overload accepts the
-  // upper edge (== width/height), which is out of range once discretized.
   u = std::floor(u_float);
   v = std::floor(v_float);
   if (u >= config_.width || u < 0 || v >= config_.height || v < 0) {
@@ -196,19 +180,14 @@ bool Camera::projectPointToImagePlane(const Eigen::Vector3f& p_C,
 
 bool Camera::pointIsInViewFrustum(const Eigen::Vector3f& point_C,
                                   float inflation_distance) const {
-  // Reject points clearly behind the camera (allowing the inflation slack).
   if (point_C.z() < -inflation_distance) {
     return false;
   }
 
-  // Reject points beyond the maximum sensing range.
   if (point_C.norm() > config_.max_range + inflation_distance) {
     return false;
   }
 
-  // A point is inside the frustum only if it lies on the inner side of every
-  // side plane. The inflation distance allows points just outside to still pass
-  // (used so blocks straddling the boundary are not culled prematurely).
   for (int i = 0; i < view_frustum_.rows(); ++i) {
     if (point_C.dot(view_frustum_.row(i)) < -inflation_distance) {
       return false;
@@ -226,13 +205,10 @@ cv::Mat Camera::computeVertexMap(const cv::Mat& depth_image,
   const float fy_inv = 1.f / config_.fy;
   for (int v = 0; v < depth_image.rows; v++) {
     for (int u = 0; u < depth_image.cols; u++) {
-      // Inverse pinhole back-projection: a depth value at pixel (u, v) maps to
-      // the camera-frame point ((u-cx)/fx, (v-cy)/fy, 1) scaled by depth.
       const float depth = depth_image.at<float>(v, u);
       const Eigen::Vector3f p_C(depth * (static_cast<float>(u) - config_.cx) * fx_inv,
                                 depth * (static_cast<float>(v) - config_.cy) * fy_inv,
                                 depth);
-      // Optionally express the point in the world frame.
       const auto p_W = T_W_C ? ((*T_W_C) * p_C).eval() : p_C;
       VLOG(15) << "(" << u << ", " << v << "), d=" << depth << ", fx=" << fx_inv
                << ", fy=" << fy_inv << ", cx=" << config_.cx << ", cy=" << config_.cy

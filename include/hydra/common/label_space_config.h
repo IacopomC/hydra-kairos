@@ -33,45 +33,36 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
+#include <spark_dsg/scene_graph_types.h>
+
 #include <array>
 #include <cstdint>
 #include <map>
 #include <set>
 #include <string>
-
-/**
- * @file label_space_config.h
- * @brief Describes the semantic label space: how many labels exist, where the
- *        color map and remapping live, and which labels are treated as dynamic,
- *        invalid, objects, surface places, or ground.
- */
+#include <vector>
 
 namespace hydra {
 
-/// @brief Configuration of the semantic label space and label categories.
 struct LabelSpaceConfig {
-  size_t total_labels = 0;                  ///< Total number of labels in the space.
-  std::string colormap_filepath = "";       ///< Path to the label-to-color map file.
-  std::string label_remap_filepath = "";    ///< Path to the label remapping file.
-  std::set<uint32_t> dynamic_labels;        ///< Labels treated as dynamic (moving) entities.
-  std::set<uint32_t> invalid_labels;        ///< Labels to ignore as invalid.
-  std::set<uint32_t> object_labels;         ///< Labels treated as discrete objects.
-  std::set<uint32_t> surface_places_labels = {};  ///< Labels treated as surface places.
-  std::set<uint32_t> ground_labels = {};    ///< Labels treated as ground.
+  size_t total_labels = 0;
+  std::string colormap_filepath = "";
+  std::string label_remap_filepath = "";
+  std::set<uint32_t> dynamic_labels;
+  std::set<uint32_t> invalid_labels;
+  std::set<uint32_t> object_labels;
+  std::set<uint32_t> surface_places_labels = {};
+  std::set<uint32_t> ground_labels = {};
+  //! @brief Scene graph layers that use this label space
+  std::vector<std::string> semantic_layers{spark_dsg::DsgLayers::OBJECTS,
+                                           spark_dsg::DsgLayers::MESH_PLACES};
 
-  /// @brief Whether a label id denotes an object.
-  /// @param id Label id to test.
-  /// @return True if the id is in the object set.
   inline bool isObject(const uint32_t id) const { return object_labels.count(id) > 0; }
-  /// @brief Whether a label id denotes a dynamic entity.
-  /// @param id Label id to test.
-  /// @return True if the id is in the dynamic set.
   inline bool isDynamic(const uint32_t id) const {
     return dynamic_labels.count(id) > 0;
   }
 };
 
-/// @brief Register the label space config fields with the config system.
 void declare_config(LabelSpaceConfig& conf);
 
 }  // namespace hydra

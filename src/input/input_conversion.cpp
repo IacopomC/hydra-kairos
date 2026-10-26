@@ -22,7 +22,8 @@ inline std::string showTypeInfo(const cv::Mat& mat) {
 }  // namespace
 
 std::unique_ptr<InputData> parseInputPacket(const InputPacket& input_packet,
-                                            const bool vertices_in_world_frame) {
+                                            bool vertices_in_world_frame,
+                                            bool normalize_labels) {
   if (!input_packet.sensor_input) {
     LOG(ERROR) << "[Input Conversion] Input packet has no sensor input.";
     return nullptr;
@@ -36,26 +37,22 @@ std::unique_ptr<InputData> parseInputPacket(const InputPacket& input_packet,
     return nullptr;
   }
 
-  // Copy the raw images/cloud out of the packet into a sensor-bound InputData.
   auto data = std::make_unique<InputData>(sensor);
   if (!input_packet.fillInputData(*data)) {
     LOG(ERROR) << "[Input Conversion] Unable to fill input data from input packet.";
     return nullptr;
   }
 
-  // Coerce depth/color/label images into the canonical types expected downstream.
-  if (!normalizeData(*data)) {
+  if (!normalizeData(*data, normalize_labels)) {
     LOG(ERROR) << "[Input Conversion] Unable to normalize data.";
     return nullptr;
   }
 
-  // Let the sensor build the derived representations (vertex map, range image).
   if (!data->getSensor().finalizeRepresentations(*data)) {
     LOG(ERROR) << "[Input Conversion] Unable to compute inputs for integration";
     return nullptr;
   }
 
-  // Ensure the pointcloud ends up in the requested (world or sensor) frame.
   convertVertexMap(*data, vertices_in_world_frame);
   return data;
 }
@@ -100,8 +97,6 @@ bool colorToLabels(cv::Mat& label_image, const cv::Mat& colors) {
     return false;
   }
 
-  // Look up each pixel's RGB triple in the semantic colormap; unknown colors
-  // fall back to -1, the sentinel for an invalid/unlabeled pixel.
   cv::Mat new_label_image(colors.size(), CV_32SC1);
   for (int r = 0; r < colors.rows; ++r) {
     for (int c = 0; c < colors.cols; ++c) {
@@ -118,12 +113,10 @@ bool colorToLabels(cv::Mat& label_image, const cv::Mat& colors) {
 }
 
 bool convertLabels(InputData& data) {
-  // No label image: derive labels from the color image via the colormap.
   if (data.label_image.empty()) {
     return colorToLabels(data.label_image, data.color_image);
   }
 
-  // A multi-channel "label" image is really a color-coded labeling; decode it.
   if (data.label_image.channels() != 1) {
     return colorToLabels(data.label_image, data.label_image);
   }
@@ -135,13 +128,11 @@ bool convertLabels(InputData& data) {
     data.label_image = new_label_image;
   }
 
-  // Apply an optional dataset-to-internal label remapping in place; unmapped
-  // labels become -1.
   LabelRemapper label_remapper = GlobalInfo::instance().getLabelRemapper();
   if (!label_remapper.empty()) {
     for (int r = 0; r < data.label_image.rows; ++r) {
       for (int c = 0; c < data.label_image.cols; ++c) {
-        // TODO: any reason to cache image and reassign with a new one?
+        // TODO(marcus): any reason to cache image and reassign with a new one?
         const auto& pixel = data.label_image.at<int32_t>(r, c);
         data.label_image.at<int32_t>(r, c) =
             label_remapper.remapLabel(pixel).value_or(-1);
@@ -192,7 +183,6 @@ bool convertDepth(InputData& data) {
     return false;
   }
 
-  // 16-bit depth is assumed to be in millimeters, so scale to meters as float.
   cv::Mat depth_converted;
   data.depth_image.convertTo(depth_converted, CV_32FC1, 1.0e-3);
   data.depth_image = depth_converted;
@@ -212,11 +202,9 @@ bool convertColor(InputData& data) {
 }
 
 void convertVertexMap(InputData& data, bool in_world_frame) {
-  // Already in the desired frame: nothing to do.
   if (data.points_in_world_frame == in_world_frame) {
     return;
   }
-  // Pick the transform that takes points from their current frame to the target.
   Eigen::Isometry3f transform = data.getSensorPose().cast<float>();  // world_T_sensor
   if (!in_world_frame) {
     transform = transform.inverse();  // Instead get sensor_T_world

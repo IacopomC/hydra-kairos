@@ -81,11 +81,9 @@ PoseGraph makePoseGraph(const StampedPose& curr_pose,
   PoseGraph graph;
   graph.stamp_ns = curr_pose.stamp.count();
 
-  // Two-node graph: the previous pose followed by the current pose.
   addNode(graph, prev_pose, prev_index);
   addNode(graph, curr_pose, prev_index + 1);
 
-  // Edge stores the relative motion between the two poses (from_T_to convention).
   Eigen::Isometry3d prev_T_curr = prev_pose.pose.inverse() * curr_pose.pose;
   addEdge(graph, prev_T_curr);
   return graph;
@@ -99,9 +97,7 @@ PoseGraphPacket PoseGraphFromOdom::update(uint64_t timestamp_ns,
   PoseGraphPacket packet;
   const StampedPose curr_pose{std::chrono::nanoseconds(timestamp_ns), world_T_body};
 
-  // The first pose has no predecessor, so only emit a graph from the second pose on.
   if (num_poses_received_ > 0) {
-    // Throttle on elapsed time: skip poses that arrive too soon after the last one.
     const auto diff_ns = curr_pose.stamp - prev_pose_.stamp;
     const auto diff_s =
         std::chrono::duration_cast<std::chrono::duration<double>>(diff_ns);
@@ -112,8 +108,6 @@ PoseGraphPacket PoseGraphFromOdom::update(uint64_t timestamp_ns,
       return packet;
     }
 
-    // Throttle on motion: combine translation and (weighted) rotation between the
-    // two poses into a single magnitude and skip if the robot has barely moved.
     const Eigen::Isometry3d pose_diff = curr_pose.pose.inverse() * prev_pose_.pose;
     const auto translation_diff = pose_diff.translation().norm();
     const auto rotation_diff = pose_diff.rotation().norm();
@@ -126,19 +120,16 @@ PoseGraphPacket PoseGraphFromOdom::update(uint64_t timestamp_ns,
       return packet;
     }
 
-    // index labels the previous pose; the current pose becomes index + 1.
     const auto index = num_poses_received_ - 1;
     packet.pose_graphs.push_back(makePoseGraph(curr_pose, prev_pose_, index));
   }
 
-  // Advance state only for poses we actually keep, so separation thresholds are
-  // measured against the last accepted pose rather than the last received one.
   prev_pose_ = curr_pose;
   ++num_poses_received_;
   return packet;
 }
 
-// TODO: this may get expanded with covariances...
+// TODO(nathan) this may get expanded with covariances...
 void declare_config(PoseGraphFromOdom::Config& config) {
   using namespace config;
   name("PoseGraphFromOdom::Config");

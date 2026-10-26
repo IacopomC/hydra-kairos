@@ -35,19 +35,9 @@
 #pragma once
 #include <Eigen/Dense>
 
-/**
- * @file printing.h
- * @brief Small formatting helpers for printing Eigen indices and a shared bracketed
- *        output format for vectors and matrices.
- */
-
 namespace hydra {
 
-/// @brief Format a 3D index vector as a bracketed, comma-separated string at full
-/// precision.
-/// @tparam Scalar Element type of the vector.
-/// @param vector The 3-element vector to format.
-/// @return The formatted string.
+// Printing.
 template <typename Scalar>
 std::string showIndex(const Eigen::Matrix<Scalar, 3, 1>& vector) {
   std::stringstream ss;
@@ -57,10 +47,8 @@ std::string showIndex(const Eigen::Matrix<Scalar, 3, 1>& vector) {
   return ss.str();
 }
 
-/// @brief Return a reusable Eigen output format with bracketed rows separated by "; ".
-/// @param precision Number of digits to print per element.
-/// @return The configured Eigen IO format.
 inline Eigen::IOFormat getDefaultFormat(int precision = Eigen::StreamPrecision) {
+  // julia-esque print fmt
   return Eigen::IOFormat(precision, Eigen::DontAlignCols, ", ", "; ", "", "", "[", "]");
 }
 

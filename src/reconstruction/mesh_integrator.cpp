@@ -58,7 +58,8 @@ void MeshIntegrator::allocateBlocks(const BlockIndices& blocks,
                                     OccupancyLayer* occupancy) const {
   auto& mesh_layer = map.getMeshLayer();
   for (const BlockIndex& block_index : blocks) {
-    auto& mesh = mesh_layer.allocateBlock(block_index, map.hasSemantics(), map.hasTracking());
+    auto& mesh =
+        mesh_layer.allocateBlock(block_index, map.hasSemantics(), map.hasTracking());
     mesh.clear();
 
     if (!occupancy) {
@@ -96,24 +97,20 @@ void MeshIntegrator::generateMesh(VolumetricMap& map,
                                   bool only_mesh_updated_blocks,
                                   bool clear_updated_flag,
                                   OccupancyLayer* occupancy) const {
-  // Precompute the eight corner offsets in metric units for the current voxel size.
-  // TODO: think about this more
+  // TODO(nathan) think about this more
   cube_coord_offsets_ = cube_index_offsets_.cast<float>() * map.config.voxel_size;
   const auto& tsdf = map.getTsdfLayer();
-  // Remesh only blocks whose TSDF changed, unless a full remesh was requested.
   const BlockIndices blocks =
       only_mesh_updated_blocks ? tsdf.blockIndicesWithCondition(TsdfBlock::meshUpdated)
                                : tsdf.allocatedBlockIndices();
 
   allocateBlocks(blocks, map, occupancy);
 
-  // Interior cubes lie fully inside a block; exterior cubes reach into neighbor blocks.
-  // Both passes are run; order shouldn't matter much.
+  // interior then exterior, but order shouldn't matter too much...
   launchThreads(blocks, true, map, occupancy);
   launchThreads(blocks, false, map, occupancy);
   showUpdateInfo(map, blocks, 5);
 
-  // Mark the mesh blocks dirty so downstream consumers pick up the new geometry.
   for (const auto& block_idx : blocks) {
     map.getMeshLayer().getBlock(block_idx).updated = true;
   }
@@ -122,7 +119,6 @@ void MeshIntegrator::generateMesh(VolumetricMap& map,
     return;
   }
 
-  // Clear the TSDF mesh-dirty flag now that these blocks have been remeshed.
   for (const auto& block_idx : blocks) {
     tsdf.getBlock(block_idx).mesh_updated = false;
   }
@@ -157,9 +153,6 @@ void MeshIntegrator::processInterior(VolumetricMap* map,
   while (index_getter->getNextIndex(block_index)) {
     VLOG(10) << "Extracting interior for block: " << showIndex(block_index);
 
-    // Each marching-cubes cell spans a voxel and its +1 neighbors, so the interior pass
-    // stops one voxel short of the far faces; those cells are handled by the exterior
-    // pass (which can reach into adjacent blocks).
     VoxelIndex v_idx;
     const int limit = map->config.voxels_per_side - 1;
     for (v_idx.x() = 0; v_idx.x() < limit; ++v_idx.x()) {
@@ -209,7 +202,6 @@ void MeshIntegrator::processExterior(VolumetricMap* map,
   }
 }
 
-// Fetch a block pointer from an optional layer, returning null if the layer is absent.
 template <typename Block>
 Block* maybeGetBlockPtr(spatial_hash::BlockLayer<Block>* layer,
                         const BlockIndex& index) {
@@ -236,15 +228,13 @@ void MeshIntegrator::meshBlockInterior(const BlockIndex& block_index,
   const auto tracking_block = maybeGetBlockPtr(map.getTrackingLayer(), block_index);
   const auto semantics = maybeGetBlockPtr(map.getSemanticLayer(), block_index);
 
-  // Gather the eight corners of the marching-cubes cell rooted at this voxel. All
-  // corners are within the block here, so they can be read directly.
   MarchingCubes::SdfPoints points;
   for (int i = 0; i < 8; ++i) {
     auto& point = points[i];
     VoxelIndex corner_index = index + cube_index_offsets_.col(i);
     const auto& voxel = block->getVoxel(corner_index);
     if (voxel.weight < config.min_weight) {
-      return;  // an unobserved corner makes the whole cell unreliable, so skip it
+      return;
     }
 
     point.weight = voxel.weight;
@@ -258,8 +248,6 @@ void MeshIntegrator::meshBlockInterior(const BlockIndex& block_index,
       }
     }
 
-    // Keep pointers to the per-corner occupancy and tracking voxels so marching cubes
-    // can write back vertex assignments and observation stamps.
     if (vertex_block) {
       point.vertex_voxel = &vertex_block->getVoxel(corner_index);
     }
@@ -275,9 +263,6 @@ void MeshIntegrator::meshBlockInterior(const BlockIndex& block_index,
 BlockIndex MeshIntegrator::getNeighborIndex(const BlockIndex& block_idx,
                                             int voxels_per_side,
                                             VoxelIndex& corner_index) {
-  // For each axis where the corner index falls outside [0, voxels_per_side), step into
-  // the adjacent block and wrap the voxel index back into range. The result is the
-  // block holding that corner, with corner_index rewritten to its local coordinate.
   BlockIndex block_offset = BlockIndex::Zero();
   for (unsigned int j = 0u; j < 3u; j++) {
     if (corner_index(j) < 0) {
@@ -309,8 +294,6 @@ void MeshIntegrator::meshBlockExterior(const BlockIndex& block_index,
   const auto tracking_block = maybeGetBlockPtr(map.getTrackingLayer(), block_index);
   const auto semantics = maybeGetBlockPtr(map.getSemanticLayer(), block_index);
 
-  // Gather the eight cell corners. For exterior cells some corners spill past the block
-  // boundary and must be fetched from the neighboring block instead.
   MarchingCubes::SdfPoints points;
   for (int i = 0; i < 8; ++i) {
     auto& point = points[i];
@@ -319,7 +302,6 @@ void MeshIntegrator::meshBlockExterior(const BlockIndex& block_index,
     const TsdfVoxel* voxel;
     const SemanticVoxel* semantic_voxel = nullptr;
     if (block->isValidVoxelIndex(c_idx)) {
-      // Corner lies inside the current block.
       voxel = &block->getVoxel(c_idx);
       if (vertex_block) {
         point.vertex_voxel = &vertex_block->getVoxel(c_idx);
@@ -331,13 +313,12 @@ void MeshIntegrator::meshBlockExterior(const BlockIndex& block_index,
         semantic_voxel = &semantics->getVoxel(c_idx);
       }
     } else {
-      // Corner is outside the block; resolve which neighbor holds it (c_idx is rewritten
-      // to the local index inside that neighbor).
+      // we have to access a different block
       const auto n_idx =
           getNeighborIndex(block_index, map.config.voxels_per_side, c_idx);
       const auto n_block = map.getTsdfLayer().getBlockPtr(n_idx);
       if (!n_block) {
-        return;  // neighbor not allocated, so this cell can't be meshed
+        return;
       }
 
       CHECK(n_block->isValidVoxelIndex(c_idx));

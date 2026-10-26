@@ -40,71 +40,61 @@
 
 #include "hydra/gnn/tensor.h"
 
-/**
- * @file gnn_interface.h
- * @brief Loads a graph-neural-net model and runs inference on it. Wraps a
- *        session of the ONNX Runtime inference library behind a private
- *        implementation and exposes call operators that map named input tensors
- *        to named output tensors, with optional resolution of dynamic output
- *        axes.
- */
-
 namespace hydra::gnn {
 
-/// @brief Maps a field name to its tensor value.
 using TensorMap = std::map<std::string, Tensor>;
-/// @brief Maps an output field name to the dynamic-axis indices it resolves.
 using DynamicIndexMap = std::map<std::string, std::vector<size_t>>;
 
-/// @brief Forward declaration of the hidden runtime-backed implementation.
 struct GnnInterfaceImpl;
 
-/// @brief Runs inference on a loaded graph-neural-net model.
 class GnnInterface {
  public:
-  /// @brief Load a model from disk with no dynamic output axes.
-  /// @param model_path Path to the model file.
+  // TODO(nathan) add actual config
   explicit GnnInterface(const std::string& model_path);
 
-  /// @brief Load a model and declare which output axes are dynamic.
-  /// @param model_path Path to the model file.
-  /// @param output_map Per-output mapping from dynamic axes to size indices.
   GnnInterface(const std::string& model_path, const DynamicIndexMap& output_map);
 
   ~GnnInterface();
 
-  /// @brief Run inference from node features and edge indices.
-  ///
-  /// Assumes the model was exported with inputs named "x" then "edge_index" and
-  /// a single output named "output".
-  /// @param x Node features.
-  /// @param edge_index Edge indices.
-  /// @return The model's output tensor.
+  /**
+   * \brief Run inference with node features and edge indices
+   *
+   * Note that this assumes the model was exported with the same order of inputs:
+   * x, then edge_index!
+   *
+   * \param[in] x Node features
+   * \param[in] edge_index Edge indices
+   * \returns Result as tensor
+   */
   Tensor operator()(const Tensor& x, const Tensor& edge_index) const;
 
-  /// @brief Run inference with arbitrary named inputs.
-  /// @param input Map from input field name to tensor value.
-  /// @return Map from output field name to result tensor.
+  /**
+   * \brief Run inference with abitrary input arguments
+   *
+   * \param[in] input Map between input name and Tensor value
+   * \returns Result as tensor
+   */
   TensorMap operator()(const TensorMap& input) const;
 
-  /// @brief Run inference with arbitrary named inputs and dynamic output sizes.
-  /// @param input Map from input field name to tensor value.
-  /// @param output_sizes Candidate sizes that dynamic output axes draw from.
-  /// @return Map from output field name to result tensor.
+  /**
+   * \brief Run inference with abitrary input arguments
+   *
+   * \param[in] input Map between input name and Tensor value
+   * \param[in] output_sizes Output sizes for dynamic output axes
+   * \returns Result as tensor
+   */
   TensorMap operator()(const TensorMap& input,
                        const std::vector<int64_t>& output_sizes) const;
 
  protected:
-  std::unique_ptr<GnnInterfaceImpl> impl_;  ///< Hidden runtime-backed state.
+  std::unique_ptr<GnnInterfaceImpl> impl_;
 
-  std::string model_path_;  ///< Path the model was loaded from.
+  std::string model_path_;
 
-  /// @brief Write the available runtime providers and the model's input and
-  ///        output fields.
-  /// @param out Stream to write to.
-  /// @param gnn Interface to describe.
-  /// @return The same stream, to allow chaining.
+  /**
+   * \brief Show information about the underlying model and deployment framework
+   */
   friend std::ostream& operator<<(std::ostream& out, const GnnInterface& gnn);
 };
 
-}  // namespace::hydra
+}  // namespace hydra::gnn

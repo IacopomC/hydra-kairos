@@ -41,8 +41,6 @@ DistancePotential getLowerDistance(float v_dist,
                                    float distance,
                                    float min_diff_m) {
   DistancePotential to_return;
-  // propose the neighbor's distance as the current distance offset by the step length,
-  // carrying the sign from whichever voxel anchors the wavefront
   if (n_dist == 0.0) {
     // this is incorrect for when n and v are both 0.0, but we're not
     // going to run into that case
@@ -51,17 +49,14 @@ DistancePotential getLowerDistance(float v_dist,
     to_return.distance = v_dist + std::copysign(distance, n_dist);
   }
 
-  // decide whether the proposal actually lowers the neighbor; the test differs when the
-  // two voxels are on the same side of the surface versus straddling it
   if (std::signbit(v_dist) == std::signbit(n_dist)) {
     to_return.is_lower = std::abs(to_return.distance) + min_diff_m < std::abs(n_dist);
   } else {
     to_return.is_lower = std::abs(to_return.distance - n_dist) > distance;
   }
 
-  // if the lowered value crossed the surface relative to the neighbor, clip it back to
-  // the surface so distances don't change sign during propagation
   if (to_return.is_lower and std::signbit(to_return.distance) != std::signbit(n_dist)) {
+    // TODO(nathan) this is weird, but clip to boundary?
     to_return.distance = (n_dist == 0.0 ? 0.0 : std::copysign(distance, n_dist));
   }
 
@@ -83,15 +78,11 @@ VoronoiCondition checkVoronoi(const VoronoiCheckConfig& cfg,
     return result;
   }
 
-  // the two voxels must be claimed by sufficiently different obstacles for the boundary
-  // between them to count as part of the Voronoi diagram
   if (!isParentUnique(cfg, current_idx, current.parent, neighbor.parent)) {
     return result;
   }
 
   // Algorithm 4: 51-52 of Lau et al. 2013
-  // a voxel sits on the Voronoi boundary when it is at least as close to the neighbor's
-  // parent as the neighbor is to the voxel's parent (compared in squared index distance)
   const GlobalIndex c_pn = current_idx - neighbor.parent;
   const GlobalIndex n_pc = neighbor_idx - current.parent;
   const GlobalIndex::Scalar dist_c_pn = c_pn.dot(c_pn);
@@ -115,8 +106,6 @@ bool isParentUniqueAngle(const VoronoiCheckConfig& config,
                          const GlobalIndex& current_index,
                          const GlobalIndex& current_parent,
                          const GlobalIndex& neighbor_parent) {
-  // measure the angle between the rays from this voxel to each parent: a small cosine
-  // means the parents are in different directions and so count as distinct obstacles
   GlobalIndex curr_vec = (current_parent - current_index);
   GlobalIndex neighbor_vec = (neighbor_parent - current_index);
   double cos_angle =

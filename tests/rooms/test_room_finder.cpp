@@ -58,7 +58,7 @@ class TestableRoomFinder : public RoomFinder {
 
 namespace {
 
-void addNode(IsolatedSceneGraphLayer& layer, size_t node_id, size_t timestamp_ns) {
+void addNode(SceneGraphLayer& layer, size_t node_id, size_t timestamp_ns) {
   auto attrs = std::make_unique<PlaceNodeAttributes>();
   attrs->position = Eigen::Vector3d::Zero();
   attrs->distance = 1.0;
@@ -109,12 +109,49 @@ TEST(RoomFinderTests, TestRoomPlaceEdges) {
   }
 }
 
+TEST(RoomFinderTests, TestRoomChildEdges) {
+  // an intermediate layer sits between places and rooms
+  DynamicSceneGraph graph({3, 4, 5}, {{DsgLayers::PLACES, 3}, {"MIDDLE", 4}, {DsgLayers::ROOMS, 5}});
+  const auto at = [](double x) {
+    return std::make_unique<NodeAttributes>(Eigen::Vector3d(x, 0.0, 0.0));
+  };
+
+  graph.emplaceNode(DsgLayers::ROOMS, "r0"_id, at(0.0));
+  graph.emplaceNode(DsgLayers::ROOMS, "r1"_id, at(10.0));
+  for (const auto id : {"p0"_id, "p1"_id, "p2"_id, "p3"_id}) {
+    graph.emplaceNode(DsgLayers::PLACES, id, at(0.0));
+  }
+
+  // a0 has two places in r0 and one in r1, a1 only has an unclustered place
+  graph.emplaceNode("MIDDLE", "a0"_id, at(5.0));
+  graph.emplaceNode("MIDDLE", "a1"_id, at(9.0));
+  graph.insertEdge("a0"_id, "p0"_id);
+  graph.insertEdge("a0"_id, "p1"_id);
+  graph.insertEdge("a0"_id, "p2"_id);
+  graph.insertEdge("a1"_id, "p3"_id);
+
+  TestableRoomFinder room_finder(RoomFinderConfig{});
+  ClusterResults results;
+  results.fillFromInitialClusters({{"p0"_id, "p1"_id}, {"p2"_id}});
+  room_finder.setResults(results, {{0, "r0"_id}, {1, "r1"_id}});
+
+  room_finder.addRoomChildEdges(graph, "MIDDLE", DsgLayers::PLACES);
+
+  // majority vote of the place children
+  EXPECT_TRUE(graph.hasEdge("r0"_id, "a0"_id));
+  EXPECT_FALSE(graph.hasEdge("r1"_id, "a0"_id));
+  // nearest room when no place child was clustered
+  EXPECT_TRUE(graph.hasEdge("r1"_id, "a1"_id));
+  // places keep their intermediate parent
+  EXPECT_EQ(graph.getNode("p2"_id).getParent(), std::optional<NodeId>("a0"_id));
+}
+
 TEST(RoomFinderTests, TestMakeRoomLayer) {
   test::ConfigGuard guard(false);
   PipelineConfig pipeline_config;
   GlobalInfo::init(pipeline_config);
 
-  IsolatedSceneGraphLayer places(DsgLayers::PLACES);
+  SceneGraphLayer places(DsgLayers::PLACES);
   addNode(places, 0, 3);
   addNode(places, 1, 4);
   addNode(places, 2, 10);

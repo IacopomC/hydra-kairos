@@ -79,10 +79,7 @@ BlockIndices findBlocksInViewFrustum(const Sensor& sensor,
 
   const auto T_C_W = T_W_C.inverse();
   const auto camera_W = T_W_C.translation();  // position of camera in world frame.
-  // Search a cube of blocks around the camera large enough to cover max range.
   const int max_steps = std::ceil(sensor.max_range() / block_size) + 1;
-  // Half the block diagonal is the inflation slack used so a block whose center
-  // is just outside the frustum but whose corner reaches inside is still kept.
   const auto block_diag_half = std::sqrt(3.0f) * block_size / 2.0f;
   const auto camera_index =
       spatial_hash::indexFromPoint<BlockIndex>(camera_W, 1.f / block_size);
@@ -93,18 +90,15 @@ BlockIndices findBlocksInViewFrustum(const Sensor& sensor,
   for (int x = -max_steps; x <= max_steps; ++x) {
     for (int y = -max_steps; y <= max_steps; ++y) {
       for (int z = -max_steps; z <= max_steps; ++z) {
-        // Offset the candidate block center and express it in the sensor frame.
         const Eigen::Vector3f offset(x, y, z);
         // p_C=  T_C_W * p_W
         const auto p_C = T_C_W * (camera_W + offset * block_size);
         const float distance = p_C.norm();
-        // Skip blocks whose center (inflated by the diagonal) is out of range.
         if (distance < min_range - block_diag_half ||
             distance > max_range + block_diag_half) {
           continue;
         }
 
-        // Keep blocks whose inflated extent intersects the view frustum.
         if (sensor.pointIsInViewFrustum(p_C, block_diag_half)) {
           result.push_back(camera_index + offset.cast<BlockIndex::Scalar>());
         }

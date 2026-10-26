@@ -50,11 +50,13 @@ void ActiveWindowOutput::updateFrom(ActiveWindowOutput&& msg, bool clone_map) {
   world_t_body = msg.world_t_body;
   world_R_body = msg.world_R_body;
   sensor_data = msg.sensor_data;
-  // TODO: this leads to incorrect behavior if we add in one update but then archive in another
-  archived_mesh_indices.insert(archived_mesh_indices.end(), msg.archived_mesh_indices.begin(), msg.archived_mesh_indices.end());
+  // TODO(nathan) this leads to incorrect behavior if we add in one update but then
+  // archive in another
+  archived_mesh_indices.insert(archived_mesh_indices.end(),
+                               msg.archived_mesh_indices.begin(),
+                               msg.archived_mesh_indices.end());
 
-  // Merge per-layer graph updates: take ownership of layers we don't yet have,
-  // and concatenate into existing layers so nothing from msg is dropped.
+  // append graph updates to current message
   for (auto&& [layer_id, layer_update] : msg.graph_update) {
     if (!layer_update) {
       continue;
@@ -68,7 +70,6 @@ void ActiveWindowOutput::updateFrom(ActiveWindowOutput&& msg, bool clone_map) {
     }
   }
 
-  // The updates have been transferred into this message; clear the source.
   msg.graph_update.clear();
 
   if (!msg.map_) {
@@ -77,8 +78,7 @@ void ActiveWindowOutput::updateFrom(ActiveWindowOutput&& msg, bool clone_map) {
   }
 
   if (!map_) {
-    // First map: share the source pointer directly when allowed, otherwise start
-    // from an empty map with matching config so the update below copies into it.
+    // avoid copying the first map if possible
     map_ = !clone_map ? msg.map_ : std::make_shared<VolumetricMap>(msg.map_->config);
   }
 

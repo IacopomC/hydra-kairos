@@ -34,20 +34,13 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file mesh_integrator_config.h
- * @brief Configuration for the mesh integrator (the marching-cubes pass that
- *        turns the TSDF into a surface mesh).
- */
-
 #include "hydra/common/global_info.h"
 
 namespace hydra {
 
-/// @brief Parameters for meshing the TSDF.
 struct MeshIntegratorConfig {
-  float min_weight = 1.0e-4;  ///< Minimum TSDF weight for a voxel to contribute to the mesh.
-  int integrator_threads = GlobalInfo::instance().getConfig().default_num_threads;  ///< Threads used for meshing.
+  float min_weight = 1.0e-4;
+  int integrator_threads = GlobalInfo::instance().getConfig().default_num_threads;
 };
 
 void declare_config(MeshIntegratorConfig& config);

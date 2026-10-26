@@ -37,42 +37,34 @@
 
 #include "hydra/places/gvd_graph.h"
 
-/**
- * @file gvd_merge_policies.h
- * @brief Pluggable strategies for deciding which of two GVD nodes is the better
- *        representative when nodes are merged during graph compression. Policies
- *        are selectable by name through the configuration factory.
- */
-
 namespace hydra::places {
 
-/// @brief Interface for ranking two GVD nodes against each other.
 struct MergePolicy {
   virtual ~MergePolicy() = default;
 
-  /// @brief Compare two GVD nodes to determine which is the better representative.
-  /// @return 1 if lhs is better, -1 if rhs is better, 0 on a tie.
+  /**
+   * \brief compare two gvd nodes to see which is more representativie
+   * \return Returns -1 if right is better, 0 if tie, 1 if left is better
+   */
   virtual int compare(const GvdMemberInfo& lhs, const GvdMemberInfo& rhs) const = 0;
 };
 
-/// @brief Merge policy preferring the node with more supporting basis points.
 struct BasisPointMergePolicy : MergePolicy {
   virtual ~BasisPointMergePolicy() = default;
 
   int compare(const GvdMemberInfo& lhs, const GvdMemberInfo& rhs) const override;
 
   inline static const auto registration_ =
-      config::Registration<MergePolicy, BasisPointMergePolicy>("basis_points");  ///< Factory registration under "basis_points".
+      config::Registration<MergePolicy, BasisPointMergePolicy>("basis_points");
 };
 
-/// @brief Merge policy preferring the node with the larger clearance distance.
 struct DistanceMergePolicy : MergePolicy {
   virtual ~DistanceMergePolicy() = default;
 
   int compare(const GvdMemberInfo& lhs, const GvdMemberInfo& rhs) const override;
 
   inline static const auto registration_ =
-      config::Registration<MergePolicy, DistanceMergePolicy>("distance");  ///< Factory registration under "distance".
+      config::Registration<MergePolicy, DistanceMergePolicy>("distance");
 };
 
 }  // namespace hydra::places

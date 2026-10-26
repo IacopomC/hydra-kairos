@@ -48,8 +48,6 @@ MinimumSpanningTreeInfo getMinimumSpanningEdges(const SceneGraphLayer& layer) {
 // implementation mainly from: https://en.wikipedia.org/wiki/Kruskal%27s_algorithm
 MinimumSpanningTreeInfo getMinimumSpanningEdges(const SceneGraphLayer& layer,
                                                 const EdgeFilter& filter) {
-  // Collect candidate edges, weighting each by the Euclidean distance between its
-  // endpoints; the optional filter lets callers exclude edges from consideration.
   std::vector<MinimalEdge> sorted_edges;
   sorted_edges.reserve(layer.edges().size());
   for (const auto& id_edge_pair : layer.edges()) {
@@ -64,18 +62,14 @@ MinimumSpanningTreeInfo getMinimumSpanningEdges(const SceneGraphLayer& layer,
         (getNodePosition(layer, edge.source) - getNodePosition(layer, edge.target))
             .norm());
   }
-  // Min-heap on edge weight (greater<> makes pop_heap surface the lightest edge).
   std::make_heap(sorted_edges.begin(), sorted_edges.end(), std::greater<>{});
 
   MinimumSpanningTreeInfo info;
   info.edges.reserve(sorted_edges.size());
-  // Track how many tree edges touch each node so leaves can be found afterwards.
   for (const auto& id_node_pair : layer.nodes()) {
     info.counts[id_node_pair.first] = 0;
   }
 
-  // Kruskal: repeatedly take the lightest remaining edge and keep it only if it
-  // joins two distinct components, using the disjoint set to detect cycles.
   DisjointSet subtrees(layer);
   while (!sorted_edges.empty()) {
     std::pop_heap(sorted_edges.begin(), sorted_edges.end(), std::greater<>{});
@@ -92,7 +86,6 @@ MinimumSpanningTreeInfo getMinimumSpanningEdges(const SceneGraphLayer& layer,
     }
   }
 
-  // A node with exactly one incident tree edge is a leaf of the spanning tree.
   for (const auto& id_count_pair : info.counts) {
     if (id_count_pair.second == 1) {
       info.leaves.insert(id_count_pair.first);

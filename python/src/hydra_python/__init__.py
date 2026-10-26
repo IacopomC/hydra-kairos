@@ -33,13 +33,34 @@
 #
 #
 """The hydra_python package."""
-import logging
 
-from hydra_python._hydra_bindings import *
-from hydra_python.bow_producer import *
-from hydra_python.data_callbacks import *
-from hydra_python.data_loader import *
-from hydra_python.pipeline import *
-from hydra_python.semantics import *
-from hydra_python.simulators import *
-from hydra_python.trajectory import *
+from contextlib import contextmanager
+
+from hydra_python._hydra_bindings import (
+    ExternalPluginConfig,
+    deinit_plugins,
+    init_plugins,
+)
+
+from ._hydra_bindings import *
+from .data_callbacks import *
+from .pipeline import *
+from .semantics import *
+from .simulators import *
+
+_all__ = [ExternalPluginConfig, deinit_plugins, init_plugins]
+
+
+@contextmanager
+def external_plugins(
+    *args, allow: bool = True, verbose: bool = True, trace_allocations: bool = True
+):
+    """Context manager for external plugins."""
+    config = ExternalPluginConfig()
+    config.allow = allow
+    config.verbose = verbose
+    config.trace_allocations = trace_allocations
+    config.paths = [x for x in args]
+    init_plugins(config)
+    yield config
+    deinit_plugins()

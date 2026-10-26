@@ -61,7 +61,7 @@ size_t getTypeSize(Tensor::Type type) {
     case Tensor::Type::UINT64:
       return sizeof(uint64_t);
     default:
-      // TODO: throw exception?
+      // TODO(nathan) throw exception?
       return 0;
   }
 }
@@ -77,15 +77,12 @@ Tensor::Tensor(int64_t rows, int64_t cols, Tensor::Type type)
     : Tensor({rows, cols}, type) {}
 
 Tensor::Tensor(const std::vector<int64_t>& dims, Type type) : type_(type), dims_(dims) {
-  // total element count is the product of the dimensions; an empty shape is a
-  // null/uninitialized tensor with no elements
   if (dims.size() == 0) {
     size_ = 0;
   } else {
     size_ = std::accumulate(dims.begin(), dims.end(), 1, std::multiplies<size_t>());
   }
 
-  // back the tensor with a flat byte buffer sized for the element count and width
   memory_.reset(new std::vector<char>(size_ * getTypeSize(type)));
 }
 
@@ -161,4 +158,4 @@ std::ostream& operator<<(std::ostream& out, const Tensor& tensor) {
   return out;
 }
 
-}  // namespace::hydra
+}  // namespace hydra::gnn

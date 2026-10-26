@@ -40,31 +40,14 @@
 #include "hydra/reconstruction/volumetric_map.h"
 #include "hydra/rooms/room_finder_config.h"
 
-/**
- * @file batch_pipeline.h
- * @brief One-shot construction of a scene graph from a completed volumetric map.
- *        Runs the graph builder (and optionally room finding) in a single pass
- *        rather than incrementally, producing a finished scene graph.
- */
-
 namespace hydra {
 
-/// @brief Builds a complete scene graph from a volumetric map in a single batch pass.
-/// Initializes global pipeline state from the given config on construction.
 class BatchPipeline {
  public:
-  /// @brief Construct the pipeline and initialize global info from the config.
-  /// @param config Pipeline-wide settings used to seed global state.
-  /// @param robot_id Identifier used to derive the robot prefix.
   BatchPipeline(const PipelineConfig& config, int robot_id = 0);
 
   virtual ~BatchPipeline();
 
-  /// @brief Build a scene graph from the supplied map in one pass.
-  /// @param graph_config Configuration selecting and parameterizing the graph builder.
-  /// @param map Volumetric map to extract the graph from.
-  /// @param room_config Optional room-finder settings; rooms are skipped when null.
-  /// @return The constructed scene graph.
   DynamicSceneGraph::Ptr construct(
       const config::VirtualConfig<GraphBuilder>& graph_config,
       VolumetricMap& map,

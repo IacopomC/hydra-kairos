@@ -47,24 +47,18 @@
 // purposes notwithstanding any copyright notation herein.
 #pragma once
 
-/**
- * @file volumetric_map.h
- * @brief The volumetric map: the bundle of co-registered voxel layers (TSDF,
- *        optional semantics and free-space tracking) plus the surface mesh that
- *        together represent the reconstructed environment. Owns block allocation
- *        and removal across all layers, save/load, and cloning, and provides the
- *        tuple accessors that reach a block or voxel in every layer at once.
- */
-
 #include "hydra/reconstruction/voxel_types.h"
 
 namespace hydra {
 
-/// @brief Merge all elements of a layer into another, overwriting overlapping
-/// data. Assumes the layers share grid layout and block type.
-/// @tparam Block Type of the block in both layers.
-/// @param layer_in Input layer to merge.
-/// @param layer_out Output layer to merge into.
+/**
+ * @brief Merge all elements of a layer into another layer, overwriting data in the
+ * other layer if it exists already. This assumes that layers have identical grid
+ * layouts and block types.
+ * @tparam Block Type of the block in both layers.
+ * @param layer_in Input layer to merge.
+ * @param layer_out Output layer to merge into.
+ */
 template <typename Block>
 void mergeLayer(const spatial_hash::BlockLayer<Block>& layer_in,
                 spatial_hash::BlockLayer<Block>& layer_out) {
@@ -80,16 +74,13 @@ void mergeLayer(const spatial_hash::VoxelLayer<Block>& layer_in,
   }
 }
 
-/// @brief Pointers to the same voxel across every layer (null where a layer is
-/// absent), so a single linear index can be read/written in all layers at once.
+// Data structure to get access to a block in all layers.
 struct VoxelTuple {
   TsdfVoxel* tsdf = nullptr;
   SemanticVoxel* semantic = nullptr;
   TrackingVoxel* tracking = nullptr;
 };
 
-/// @brief The co-located blocks across every layer for one block index.
-/// getVoxels() gathers the per-layer voxels at a linear index within the block.
 struct BlockTuple {
   TsdfBlock::Ptr tsdf;
   SemanticBlock::Ptr semantic;
@@ -97,35 +88,28 @@ struct BlockTuple {
   VoxelTuple getVoxels(const size_t linear_index) const;
 };
 
-/// @brief The reconstructed map: a TSDF layer plus a surface mesh, with optional
-/// semantic and free-space-tracking layers, all sharing one block grid. Handles
-/// block allocation/removal across the layers, persistence, and cloning.
 class VolumetricMap {
  public:
   struct Config {
-    /// Voxel size (metres).
+    //! Voxel size.
     float voxel_size = 0.1f;
-    /// Number of voxels per block side.
+    //! Number of voxels per block side.
     size_t voxels_per_side = 16;
-    /// TSDF truncation distance (metres).
+    //! TSDF truncation distance.
     float truncation_distance = 0.3f;
-    /// Whether the map has a semantic layer.
+    //! Whether or not the map has a semantic layer.
     bool with_semantics = false;
-    /// Whether the map has a free-space tracking layer.
+    //! Whether or not the map has a tracking layer.
     bool with_tracking = false;
   } const config;
 
   explicit VolumetricMap(const Config& config);
   virtual ~VolumetricMap() = default;
 
-  /// @brief Edge length of one block (voxel_size * voxels_per_side), in metres.
   float blockSize() const { return config.voxel_size * config.voxels_per_side; }
 
-  /// @brief Gather the co-located blocks at @p index across every layer.
   virtual BlockTuple getBlock(const BlockIndex& index);
 
-  /// @brief Access the individual layers. The semantic and tracking layers are
-  /// null when the map was configured without them.
   TsdfLayer& getTsdfLayer() { return tsdf_layer_; }
   const TsdfLayer& getTsdfLayer() const { return tsdf_layer_; }
 
@@ -138,64 +122,55 @@ class VolumetricMap {
   TrackingLayer* getTrackingLayer() { return tracking_layer_.get(); }
   const TrackingLayer* getTrackingLayer() const { return tracking_layer_.get(); }
 
-  /// @brief Whether the optional semantic / tracking layers are present.
   bool hasSemantics() const { return semantic_layer_ != nullptr; }
 
   bool hasTracking() const { return tracking_layer_ != nullptr; }
 
-  /// @brief Allocate a block in all relevant layers of the map.
-  /// @param index Index of the block to allocate.
-  /// @return True if a new block was allocated, false if it already existed.
+  /**
+   * @brief Allocate a block in all relevant layers of the map.
+   * @param index Index of the block to allocate.
+   * @return True if a new bock was allocated, false if the block already existed.
+   */
   virtual bool allocateBlock(const BlockIndex& index);
 
-  /// @brief Allocate a set of blocks in all relevant layers of the map.
-  /// @param blocks Block indices to allocate.
-  /// @return The block indices that were newly allocated.
+  /**
+   * @brief Allocate a set of blocks in all relevant layers of the map.
+   * @tparam BlockIndexIterable Type of the iterable containing block indices.
+   * @param blocks Iterable containing the block indices to allocate.
+   * @return List of block indices that were allocated.
+   */
   BlockIndices allocateBlocks(const BlockIndices& blocks);
 
-  /// @brief Remove a block (or a set of blocks) from every layer.
   virtual void removeBlock(const BlockIndex& block);
 
   void removeBlocks(const BlockIndices& blocks);
 
-  /// @brief Human-readable summary of layer/block/voxel counts, for logging.
-  virtual std::string printStats() const;
-
-  /// @brief Footprint of the windowed map's voxel layers, by allocated-block
-  /// count and bytes. Because the layers are bounded by the active window, the
-  /// block counts stay flat as the explored area grows — the direct signal of
-  /// the bounded-memory property. The GVD/places layer is owned elsewhere and
-  /// is not included here.
+  //! Block counts and estimated voxel memory of the map layers
   struct MemoryStats {
     size_t voxels_per_side = 0;
     size_t tsdf_blocks = 0;
-    size_t semantic_blocks = 0;  ///< 0 when the map has no semantic layer.
-    /// tsdf_bytes is exact (TsdfVoxel is POD). semantic_bytes counts the voxel
-    /// containers only and excludes each voxel's variable-length likelihood
-    /// heap, so it is a lower bound when semantics are enabled.
+    //! 0 when the map has no semantic layer
+    size_t semantic_blocks = 0;
     size_t tsdf_bytes = 0;
     size_t semantic_bytes = 0;
   };
+
   MemoryStats memoryStats() const;
 
-  /// @brief Serialize the whole map to @p filepath.
+  virtual std::string printStats() const;
+
   void save(const std::string& filepath) const;
 
-  /// @brief Build a map from an existing TSDF layer, re-deriving the config from it.
   static std::unique_ptr<VolumetricMap> fromTsdf(const TsdfLayer& tsdf,
                                                  double truncation_distance_m,
                                                  bool with_semantics = false);
 
-  /// @brief Load a map previously written by save().
   static std::unique_ptr<VolumetricMap> load(const std::string& filepath);
 
-  /// @brief Deep-copy the whole map.
   virtual std::unique_ptr<VolumetricMap> clone() const;
 
-  /// @brief Deep-copy only the blocks currently flagged updated.
   virtual std::unique_ptr<VolumetricMap> cloneUpdated() const;
 
-  /// @brief Merge another map's blocks into this one (overwriting overlaps).
   virtual void updateFrom(const VolumetricMap& other);
 
  protected:

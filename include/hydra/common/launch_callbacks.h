@@ -37,19 +37,8 @@
 #include <memory>
 #include <thread>
 
-/**
- * @file launch_callbacks.h
- * @brief Helper that runs a collection of callbacks concurrently, one thread
- *        each, and blocks until every callback has finished.
- */
-
 namespace hydra {
 
-/// @brief Run each callback on its own thread and join them all before returning.
-/// @tparam Funcs Iterable of callables.
-/// @tparam Args Argument types forwarded to every callback.
-/// @param callbacks Callbacks to invoke concurrently.
-/// @param args Arguments passed (copied) to each callback.
 template <typename Funcs, typename... Args>
 void launchCallbacks(const Funcs& callbacks, Args... args) {
   std::list<std::thread> threads;

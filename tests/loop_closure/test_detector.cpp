@@ -32,10 +32,45 @@
  * Government is authorized to reproduce and distribute reprints for Government
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
+#include <config_utilities/config.h>
+#include <config_utilities/factory.h>
 #include <gtest/gtest.h>
 #include <hydra/loop_closure/detector.h>
 
 namespace hydra::lcd {
+
+namespace {
+
+struct InvalidSolver : DsgRegistrationSolver {
+  struct Config {
+    int value = 0;
+  } const config;
+
+  explicit InvalidSolver(const Config& config) : config(config) {}
+
+  RegistrationSolution solve(const DynamicSceneGraph&,
+                             const DsgRegistrationInput&,
+                             NodeId) const override {
+    return {};
+  }
+
+  inline static const auto registration_ =
+      config::RegistrationWithConfig<DsgRegistrationSolver, InvalidSolver, Config>(
+          "InvalidSolver");
+};
+
+void declare_config(InvalidSolver::Config& config) {
+  using namespace config;
+  name("InvalidSolver::Config");
+  field(config.value, "value");
+}
+
+struct TestableDetector : LcdDetector {
+  using LcdDetector::LcdDetector;
+  bool hasSolver(size_t level) const { return registration_solvers_.count(level); }
+};
+
+}  // namespace
 
 struct LcdDetectorTests : public ::testing::Test {
   LcdDetectorTests() = default;
@@ -110,16 +145,18 @@ TEST_F(LcdDetectorTests, TestActualChildren) {
   using namespace std::chrono_literals;
   dsg->emplaceNode(DsgLayers::PLACES, 1, std::make_unique<PlaceNodeAttributes>());
   dsg->emplaceNode(DsgLayers::OBJECTS, 2, std::make_unique<ObjectNodeAttributes>());
-  dsg->emplaceNode(DsgLayers::AGENTS,
-                   'a',
-                   10ns,
-                   std::make_unique<AgentNodeAttributes>(
-                       Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0));
-  dsg->emplaceNode(DsgLayers::AGENTS,
-                   'a',
-                   20ns,
-                   std::make_unique<AgentNodeAttributes>(
-                       Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0));
+  dsg->emplaceNode(
+      2,
+      "a0"_id,
+      std::make_unique<AgentNodeAttributes>(
+          10ns, Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0),
+      'a');
+  dsg->emplaceNode(
+      2,
+      "a1"_id,
+      std::make_unique<AgentNodeAttributes>(
+          20ns, Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0),
+      'a');
   dsg->insertEdge(1, 2);
   dsg->insertEdge(1, NodeSymbol('a', 0));
   dsg->insertEdge(1, NodeSymbol('a', 1));
@@ -134,11 +171,12 @@ TEST_F(LcdDetectorTests, TestActualChildren) {
 
 TEST_F(LcdDetectorTests, TestEmptySearch) {
   using namespace std::chrono_literals;
-  dsg->emplaceNode(DsgLayers::AGENTS,
-                   'a',
-                   10ns,
-                   std::make_unique<AgentNodeAttributes>(
-                       Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0));
+  dsg->emplaceNode(
+      2,
+      "a0"_id,
+      std::make_unique<AgentNodeAttributes>(
+          10ns, Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0),
+      'a');
 
   LcdDetector module(config);
   std::unordered_set<NodeId> active_places{1};
@@ -151,16 +189,18 @@ TEST_F(LcdDetectorTests, TestNonEmptySearch) {
   using namespace std::chrono_literals;
   dsg->emplaceNode(DsgLayers::PLACES, 1, std::make_unique<PlaceNodeAttributes>());
   dsg->emplaceNode(DsgLayers::OBJECTS, 2, std::make_unique<ObjectNodeAttributes>());
-  dsg->emplaceNode(DsgLayers::AGENTS,
-                   'a',
-                   10ns,
-                   std::make_unique<AgentNodeAttributes>(
-                       Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0));
-  dsg->emplaceNode(DsgLayers::AGENTS,
-                   'a',
-                   20ns,
-                   std::make_unique<AgentNodeAttributes>(
-                       Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0));
+  dsg->emplaceNode(
+      2,
+      "a0"_id,
+      std::make_unique<AgentNodeAttributes>(
+          10ns, Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0),
+      'a');
+  dsg->emplaceNode(
+      2,
+      "a1"_id,
+      std::make_unique<AgentNodeAttributes>(
+          20ns, Eigen::Quaterniond::Identity(), Eigen::Vector3d::Zero(), 0),
+      'a');
   dsg->insertEdge(1, 2);
   dsg->insertEdge(1, NodeSymbol('a', 0));
   dsg->insertEdge(1, NodeSymbol('a', 1));
@@ -174,6 +214,25 @@ TEST_F(LcdDetectorTests, TestNonEmptySearch) {
 
   const auto results = module.detect(*dsg, NodeSymbol('a', 0));
   EXPECT_EQ(0u, results.size());
+}
+
+TEST_F(LcdDetectorTests, AgentSolverFromConfig) {
+  {  // no agent solver by default
+    TestableDetector detector(config);
+    EXPECT_FALSE(detector.hasSolver(0));
+  }
+
+  config.agent_registration = config::VirtualConfig<DsgRegistrationSolver>(InvalidSolver::Config{});
+  {  // configured solver is installed at the agent level
+    TestableDetector detector(config);
+    EXPECT_TRUE(detector.hasSolver(0));
+  }
+
+  config.enable_agent_registration = false;
+  {  // and skipped when agent registration is off
+    TestableDetector detector(config);
+    EXPECT_FALSE(detector.hasSolver(0));
+  }
 }
 
 }  // namespace hydra::lcd

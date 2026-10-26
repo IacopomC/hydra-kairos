@@ -79,13 +79,11 @@ IdentitySensorExtrinsics::IdentitySensorExtrinsics(const Config&)
     : SensorExtrinsics() {}
 
 ParamSensorExtrinsics::ParamSensorExtrinsics(const Config& config)
-    : SensorExtrinsics(config.body_R_sensor, config.body_p_sensor) {}
+    : SensorExtrinsics(config.body_R_sensor.normalized(), config.body_p_sensor) {}
 
 KimeraSensorExtrinsics::KimeraSensorExtrinsics(const Config& config)
     : SensorExtrinsics() {
   config::checkValid(config);
-  // Read the body-to-sensor transform from a Kimera-style calibration file: the
-  // T_BS data is a 16-element list in row-major order.
   const auto node = YAML::LoadFile(config.sensor_filepath);
   const auto elements = node["T_BS"]["data"].as<std::vector<double>>();
   CHECK_EQ(elements.size(), 16u);
@@ -97,7 +95,6 @@ KimeraSensorExtrinsics::KimeraSensorExtrinsics(const Config& config)
     }
   }
 
-  // Split the homogeneous matrix into a (renormalized) rotation and translation.
   body_R_sensor = Eigen::Quaterniond(body_T_sensor.block<3, 3>(0, 0)).normalized();
   body_p_sensor = body_T_sensor.block<3, 1>(0, 3);
 }
@@ -112,7 +109,7 @@ void declare_config(ParamSensorExtrinsics::Config& conf) {
   name("ParamSensorExtrinsics");
   field<QuaternionConverter>(conf.body_R_sensor, "body_R_sensor");
   field(conf.body_p_sensor, "body_p_sensor");
-  checkCondition(std::abs(conf.body_R_sensor.norm() - 1.0) < 1.0e-9,
+  checkCondition(std::abs(conf.body_R_sensor.norm() - 1.0) < 1.0e-3,
                  "Quaternion is not normalized");
 }
 
@@ -120,7 +117,7 @@ void declare_config(KimeraSensorExtrinsics::Config& conf) {
   using namespace config;
   name("KimeraSensorExtrinsics");
   field(conf.sensor_filepath, "sensor_filepath");
-  // TODO: validate file
+  // TODO(nathan) validate file
 }
 
 }  // namespace hydra

@@ -37,27 +37,23 @@ bool CsvReader::setup(const std::string& file_name,
   std::string line, word;
   bool is_header = skip_first_line;
   while (getline(file, line)) {
-    // Split the line into fields on the separator character.
     row.clear();
     std::stringstream str(line);
     while (getline(str, word, separator)) {
       row.push_back(word);
     }
-    // Strip a trailing CR/LF left on the last field (e.g. CRLF line endings).
     char final_char = row.back().back();
     if (final_char == '\n' || final_char == '\r') {
       row.back().erase(row.back().length() - 1);  // remove the newline.
     }
 
     if (is_header) {
-      // First line defines the column names and their header->index mapping.
       headers_ = row;
       for (size_t i = 0; i < headers_.size(); i++) {
         header_to_index_->emplace(headers_[i], i);
       }
       is_header = false;
     } else {
-      // Pad/truncate to the header width so every row has one cell per column.
       row.resize(headers_.size());
       rows_.emplace_back(row, header_to_index_);
     }

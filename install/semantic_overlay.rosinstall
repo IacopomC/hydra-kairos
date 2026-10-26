@@ -1,4 +1,0 @@
-- git:
-    local-name: semantic_inference
-    uri: https://github.com/MIT-SPARK/semantic_inference.git
-    version: archive/ros_noetic

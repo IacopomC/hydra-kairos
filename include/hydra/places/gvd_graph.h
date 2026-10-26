@@ -42,64 +42,45 @@
 
 #include "hydra/reconstruction/voxel_types.h"
 
-/**
- * @file gvd_graph.h
- * @brief Lightweight graph over Voronoi voxels. Each node records a position,
- *        clearance distance, basis-point count, and a set of sibling nodes,
- *        providing the intermediate connectivity that the place-graph
- *        extractors consume.
- */
-
 namespace hydra::places {
 
-/// @brief Per-node record in the GVD graph.
 struct GvdMemberInfo {
-  double distance = 0.0;          ///< Clearance to the nearest surface at this node (m).
-  uint8_t num_basis_points = 0;   ///< Number of distinct nearest-surface parents supporting the node.
-  Eigen::Vector3d position;       ///< World position of the node.
-  GlobalIndex index;              ///< Voxel index this node was created from.
-  std::set<uint64_t> siblings;    ///< Ids of adjacent nodes in the graph.
+  double distance = 0.0;
+  uint8_t num_basis_points = 0;
+  Eigen::Vector3d position;
+  GlobalIndex index;
+  std::set<uint64_t> siblings;
 };
 
-/// @brief Graph of GVD members keyed by integer id, with id recycling on removal.
 class GvdGraph {
  public:
-  using Ptr = std::shared_ptr<GvdGraph>;                          ///< Shared-pointer alias.
-  using Nodes = std::unordered_map<uint64_t, GvdMemberInfo>;       ///< Map from node id to member info.
+  using Ptr = std::shared_ptr<GvdGraph>;
+  using Nodes = std::unordered_map<uint64_t, GvdMemberInfo>;
 
   GvdGraph();
 
-  /// @brief Return whether the graph holds no nodes.
   bool empty() const;
 
-  /// @brief Add a node at a position and voxel index.
-  /// @return Id assigned to the new node (a recycled id when one is available).
   uint64_t addNode(const Eigen::Vector3d& position, const GlobalIndex& index);
 
-  /// @brief Remove a node, detach it from its siblings, and recycle its id.
   void removeNode(uint64_t node);
 
-  /// @brief Look up a node by id; throws if the id is not present.
   GvdMemberInfo* getNode(uint64_t node);
 
-  /// @brief Const overload of getNode.
   const GvdMemberInfo* getNode(uint64_t node) const;
 
-  /// @brief Access all nodes keyed by id.
   const Nodes& nodes() const;
 
-  /// @brief Return whether a node with the given id exists.
   bool hasNode(uint64_t) const;
 
  protected:
-  /// @brief Pop a recycled id if any are queued, otherwise allocate a fresh one.
   uint64_t getNextId();
 
  protected:
-  uint64_t next_id_;               ///< Next never-used id to hand out.
-  std::list<uint64_t> id_queue_;   ///< Freed ids awaiting reuse.
+  uint64_t next_id_;
+  std::list<uint64_t> id_queue_;
 
-  Nodes nodes_;                    ///< Node storage keyed by id.
+  Nodes nodes_;
 };
 
 }  // namespace hydra::places

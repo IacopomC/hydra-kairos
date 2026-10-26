@@ -34,31 +34,18 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 
-/**
- * @file robot_prefix_config.h
- * @brief Per-robot symbol prefixes. Derives the node and mesh-vertex prefix
- *        characters from a numeric robot id so that symbols stay unique across
- *        robots.
- */
-
 namespace hydra {
 
-/// @brief Symbol prefixes associated with a single robot.
-/// The prefix characters are derived from the robot id on construction.
 struct RobotPrefixConfig {
-  /// @brief Build the prefixes for a given robot id.
-  /// @param robot_id Numeric identifier of the robot.
   RobotPrefixConfig(int robot_id);
 
-  /// @brief Build the prefixes for robot id 0.
   RobotPrefixConfig();
 
-  int id;          ///< Numeric robot identifier.
-  char key;        ///< Symbol prefix for this robot's nodes.
-  char vertex_key; ///< Symbol prefix for this robot's mesh vertices.
+  int id;
+  char key;
+  char vertex_key;
 };
 
-/// @brief Register the robot prefix config fields with the config system.
 void declare_config(RobotPrefixConfig& config);
 
 }  // namespace hydra

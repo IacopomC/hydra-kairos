@@ -59,21 +59,15 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // smoke-test driver: load the model named on the command line and print the
-  // input/output field layout it reports
   std::string model_path(argv[1]);
   hydra::gnn::GnnInterface gnn(model_path);
 
   LOG(INFO) << gnn;
 
-  // feed a dummy graph through the model to confirm it runs end to end:
-  // 10 nodes with a zeroed 5-dim feature each
   hydra::gnn::Tensor x(10, 5);
   auto x_map = x.map<float>();
   x_map = Eigen::MatrixXf::Zero(10, 5);
 
-  // edge_index is the [2 x num_edges] connectivity expected by graph models;
-  // here three edges into nodes 1, 2, and 3
   hydra::gnn::Tensor edge_index(2, 3, hydra::gnn::Tensor::Type::INT64);
   auto index_map = edge_index.map<int64_t>();
   index_map(1, 0) = 1;

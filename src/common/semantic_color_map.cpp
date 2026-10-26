@@ -48,9 +48,6 @@ SemanticColorMap::SemanticColorMap() : SemanticColorMap(ColorToLabelMap()) {}
 SemanticColorMap::SemanticColorMap(const ColorToLabelMap& color_to_label,
                                    const Color& unknown)
     : max_label_(0), color_to_label_(color_to_label), unknown_color_(unknown) {
-  // build the inverse (label -> color) lookup and track the largest label seen so
-  // getNumLabels() can report the table size; warn if any color collides with the
-  // reserved unknown color, which would make that color ambiguous
   for (auto&& [color, label] : color_to_label_) {
     LOG_IF(WARNING, unknown_color_ == color)
         << "found duplicate color with provided unknown color " << color
@@ -68,7 +65,6 @@ std::optional<uint32_t> SemanticColorMap::getLabelFromColor(const Color& color) 
     return it->second;
   }
 
-  // log each unrecognized color only once to avoid flooding the log on every pixel
   if (!unknown_colors_.count(color)) {
     LOG(ERROR) << "Caught an unknown color " << color << ".";
     unknown_colors_.insert(color);
@@ -83,7 +79,6 @@ Color SemanticColorMap::getColorFromLabel(const uint32_t& label) const {
     return it->second;
   }
 
-  // log each unrecognized label only once, then fall back to the unknown color
   if (!unknown_labels_.count(label)) {
     LOG(ERROR) << "Caught an unknown label " << std::to_string(label);
     unknown_labels_.insert(label);
@@ -133,14 +128,11 @@ SemanticColorMap::Ptr SemanticColorMap::fromCsv(const std::string& filename,
     return nullptr;
   }
 
-  // alpha is optional, but the rgb channels and id column are mandatory
   if (!reader.checkRequiredHeaders(
           {red_header, green_header, blue_header, id_header})) {
     return nullptr;
   }
 
-  // accumulate one color -> label entry per row; default alpha to fully opaque when
-  // the column is absent
   ColorToLabelMap cmap;
   const bool has_alpha = reader.hasHeader(alpha_header);
   for (size_t row = 0; row < reader.numRows(); row++) {
@@ -167,8 +159,6 @@ SemanticColorMap::Ptr SemanticColorMap::randomColors(size_t num_labels,
                                     Color::yellow(),
                                     Color::pink()};
 
-  // assign the curated palette to the first labels for readability, then fall back to
-  // random colors once it is exhausted
   ColorToLabelMap cmap;
   for (size_t i = 0; i < num_labels; i++) {
     cmap[(i < defaults.size()) ? defaults.at(i) : Color::random()] = i;

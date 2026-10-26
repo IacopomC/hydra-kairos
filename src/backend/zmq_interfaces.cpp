@@ -96,8 +96,6 @@ ZmqRoomLabelUpdater::~ZmqRoomLabelUpdater() {
 }
 
 void ZmqRoomLabelUpdater::checkForUpdates() {
-  // Background loop: poll for externally published graphs and cache their room
-  // names so the update functor can stamp them onto the local graph later.
   while (!should_shutdown_) {
     if (!receiver_->recv(config.poll_time_ms)) {
       continue;

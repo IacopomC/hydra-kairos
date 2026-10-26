@@ -35,7 +35,6 @@
 #include "hydra/loop_closure/registration.h"
 
 #include <fstream>
-#include <functional>
 #include <iomanip>
 
 #include "hydra/utils/timing_utilities.h"
@@ -63,33 +62,19 @@ AgentNodePose getAgentPose(const DynamicSceneGraph& graph, NodeId root_id) {
   }
 
   const auto& root_node = graph.getNode(root_id);
-
-  // Recursively search for a dynamic agent child (may be through archetype layer)
-  std::optional<NodeId> child_id = std::nullopt;
-  std::function<bool(const SceneGraphNode&)> findAgent;
-  findAgent = [&](const SceneGraphNode& node) -> bool {
-    for (const auto& child : node.children()) {
-      if (graph.isDynamic(child)) {
-        child_id = child;
-        return true;
-      }
-      if (findAgent(graph.getNode(child))) {
-        return true;
-      }
+  for (const auto& root_child : root_node.children()) {
+    const auto& child = graph.getNode(root_child);
+    if (!child.layer.partition) {
+      continue;  // skip non-agent nodes
     }
-    return false;
-  };
-  findAgent(root_node);
 
-  if (!child_id) {
-    return {};
+    const auto& attrs = child.attributes<AgentNodeAttributes>();
+    return {true,
+            gtsam::Pose3(gtsam::Rot3(attrs.world_R_body), attrs.position),
+            root_child};
   }
 
-  CHECK(child_id);
-
-  const auto& attrs = graph.getNode(*child_id).attributes<AgentNodeAttributes>();
-  return {
-      true, gtsam::Pose3(gtsam::Rot3(attrs.world_R_body), attrs.position), *child_id};
+  return {};
 }
 
 AgentNodePose getQueryPose(const DynamicSceneGraph& graph, NodeId query_agent_id) {
@@ -126,15 +111,11 @@ RegistrationSolution getFullSolutionFromLayer(const DynamicSceneGraph& graph,
     return {};
   }
 
-  // The layer solver returns dest_T_src between the two place subgraphs in the
-  // world frame. Compose with the query and match agent poses to express the
-  // closure as a relative transform between the two agent bodies (to_T_from),
-  // which is what the backend factor expects.
   gtsam::Pose3 to_T_from = to_pose_info.world_T_body.inverse() * solution.dest_T_src *
                            from_pose_info.world_T_body;
 
-  VLOG(3) << "[DSG_LCD] Solution of " << NodeSymbol(query_agent_id).getLabel() << " -> "
-          << NodeSymbol(to_pose_info.id).getLabel() << ":";
+  VLOG(3) << "[DSG_LCD] Solution of " << NodeSymbol(query_agent_id).str() << " -> "
+          << NodeSymbol(to_pose_info.id).str() << ":";
   VLOG(3) << "  - world_T_from: " << getPoseRepr(from_pose_info.world_T_body);
   VLOG(3) << "  - world_T_to:   " << getPoseRepr(to_pose_info.world_T_body);
   VLOG(3) << "  - dest_T_src:   " << getPoseRepr(solution.dest_T_src);
@@ -178,28 +159,25 @@ void logRegistrationProblem(const std::string& path_prefix,
           << std::endl;
   outfile << "dest_t_src: " << solution.dest_T_src.translation() << std::endl;
 
-  // TODO: output position data
+  // TODO(nathan) output position data
 }
 
-DsgTeaserSolver::DsgTeaserSolver(LayerId layer_id,
+DsgTeaserSolver::DsgTeaserSolver(const std::string& layer,
                                  const LayerRegistrationConfig& config,
                                  const TeaserParams& params)
-    : layer_id(layer_id), config(config), solver(params) {
-  const std::string layer_str = DsgLayers::LayerIdToString(layer_id);
-  timer_prefix = "lcd/" + layer_str + "_registration";
-  log_prefix = config.registration_output_path + "/" + layer_str + "_registration_";
+    : layer_id(layer), config(config), solver(params) {
+  timer_prefix = "lcd/" + layer_id + "_registration";
+  log_prefix = config.registration_output_path + "/" + layer_id + "_registration_";
 }
 
 RegistrationSolution DsgTeaserSolver::solve(const DynamicSceneGraph& dsg,
                                             const DsgRegistrationInput& match,
                                             NodeId query_agent_id) const {
-  // TODO: helper function in dsg
-  const uint64_t timestamp = dsg.getNode(query_agent_id).timestamp.value().count();
+  // TODO(nathan) helper function in dsg
+  const uint64_t timestamp =
+      dsg.getNode(query_agent_id).attributes<AgentNodeAttributes>().timestamp.count();
   ScopedTimer timer(timer_prefix, timestamp, true, 2, false);
 
-  // Assemble the correspondence problem. Either re-extract fresh subgraphs
-  // around the two roots (so the registration node sets can differ from the
-  // ones used for matching) or reuse the node sets carried in the match.
   LayerRegistrationProblem<std::set<NodeId>> problem;
   if (config.recreate_subgraph) {
     const bool is_places = layer_id == DsgLayers::PLACES;
@@ -212,19 +190,16 @@ RegistrationSolution DsgTeaserSolver::solve(const DynamicSceneGraph& dsg,
     problem.dest_nodes = match.match_nodes;
   }
 
-  // TEASER needs enough points to solve; bail out if either side is too small.
   if (problem.src_nodes.size() <= 3 || problem.dest_nodes.size() <= 3) {
     if (problem.src_nodes.empty()) {
-      LOG(ERROR) << "Invalid query: " << NodeSymbol(match.query_root).getLabel();
+      LOG(ERROR) << "Invalid query: " << NodeSymbol(match.query_root).str();
     } else {
-      LOG(ERROR) << "Invalid match: " << NodeSymbol(match.match_root).getLabel();
+      LOG(ERROR) << "Invalid match: " << NodeSymbol(match.match_root).str();
     }
 
     return {};
   }
 
-  // If the two subgraphs share too many nodes they describe the same region;
-  // a registration between them would be near-identity and uninformative.
   size_t num_same = 0;
   for (const auto& qnode : problem.src_nodes) {
     if (problem.dest_nodes.count(qnode)) {
@@ -238,9 +213,6 @@ RegistrationSolution DsgTeaserSolver::solve(const DynamicSceneGraph& dsg,
     return {};
   }
 
-  // Build correspondences and run the robust solver. Pairwise matching forms
-  // all-pairs correspondences; semantic matching only pairs nodes of the same
-  // class to cut down the correspondence count.
   const auto& layer = dsg.getLayer(layer_id);
   LayerRegistrationSolution solution;
   if (config.use_pairwise_registration) {

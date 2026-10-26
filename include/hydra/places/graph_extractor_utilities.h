@@ -34,38 +34,48 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 #include <bitset>
+#include <cstddef>
+#include <cstdint>
 #include <iostream>
+#include <string>
 
 #include "hydra/common/dsg_types.h"
-#include "hydra/places/graph_extractor_config.h"
 #include "hydra/places/gvd_voxel.h"
 #include "hydra/reconstruction/voxel_types.h"
 
-/**
- * @file graph_extractor_utilities.h
- * @brief Helpers shared by the place-graph extractors for proposing edges:
- *        rasterizing a voxel line between two indices, scoring candidate edges
- *        by their clearance, and gathering overlap-based and free-space edges.
- */
-
 namespace hydra::places {
 
-using EdgeInfoMap = std::map<EdgeKey, EdgeAttributes::Ptr>;     ///< Proposed edges keyed by endpoint pair.
-using NodeIndexMap = std::unordered_map<NodeId, GlobalIndex>;   ///< Map from place node to its source voxel index.
+struct OverlapEdgeConfig {
+  //! Number of nearest neighbors to check for free-space overlap
+  size_t num_neighbors_to_check = 4;
+  //! Minimum radius to nearest obstacle for the free-space intersection
+  double min_clearance_m = 0.4;
+};
 
-/// @brief Rasterize the voxel indices along the straight line from start to end.
+struct FreespaceEdgeConfig {
+  //! Maximum edge length to project
+  double max_length_m = 2.0;
+  //! Number of nodes to check in a disconnected component for edge candidates
+  size_t num_nodes_to_check = 5;
+  //! Number of nearest neighbors to find in another disconnected component
+  size_t num_neighbors_to_find = 1;
+  //! Minimum distance to the nearest obstacle along an edge
+  double min_clearance_m = 0.5;
+};
+
+void declare_config(FreespaceEdgeConfig& config);
+void declare_config(OverlapEdgeConfig& config);
+
+using EdgeInfoMap = std::map<EdgeKey, EdgeAttributes::Ptr>;
+using NodeIndexMap = std::unordered_map<NodeId, GlobalIndex>;
+
 GlobalIndices makeBresenhamLine(const GlobalIndex& start, const GlobalIndex& end);
 
-/// @brief Build edge attributes for two nodes whose free-space regions overlap.
-/// @return Attributes if the edge clears min_edge_clearance_m, otherwise null.
 EdgeAttributes::Ptr getOverlapEdgeInfo(const SceneGraphLayer& graph,
                                        NodeId node,
                                        NodeId neighbor,
                                        double min_edge_clearance_m);
 
-/// @brief Build edge attributes for a free-space bridge between two nodes,
-/// checking clearance along the voxel line connecting them.
-/// @return Attributes if the path clears min_edge_clearance_m, otherwise null.
 EdgeAttributes::Ptr getFreespaceEdgeInfo(const SceneGraphLayer& graph,
                                          const GvdLayer& gvd,
                                          const NodeIndexMap& node_index_map,
@@ -73,15 +83,11 @@ EdgeAttributes::Ptr getFreespaceEdgeInfo(const SceneGraphLayer& graph,
                                          NodeId other,
                                          double min_edge_clearance_m);
 
-/// @brief Collect candidate edges between active nodes with overlapping free space.
-/// @param proposed_edges Output map extended with the discovered edges.
 void findOverlapEdges(const OverlapEdgeConfig& config,
                       const SceneGraphLayer& graph,
                       const std::unordered_set<NodeId> active_nodes,
                       EdgeInfoMap& proposed_edges);
 
-/// @brief Collect candidate edges that bridge disconnected components through free space.
-/// @param proposed_edges Output map extended with the discovered edges.
 void findFreespaceEdges(const FreespaceEdgeConfig& config,
                         const SceneGraphLayer& graph,
                         const GvdLayer& gvd,

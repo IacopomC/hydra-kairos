@@ -39,18 +39,23 @@
 #include <config_utilities/validation.h>
 #include <glog/logging.h>
 #include <glog/stl_logging.h>
+#include <kimera_pgmo/mesh_delta.h>
+#include <kimera_pgmo/pcl_mesh_traits.h>
 #include <kimera_pgmo/utils/mesh_io.h>
 
 #include "hydra/backend/backend_utilities.h"
 #include "hydra/backend/mst_factors.h"
 #include "hydra/common/global_info.h"
-#include "hydra/common/launch_callbacks.h"
 #include "hydra/common/pipeline_queues.h"
-#include "hydra/utils/minimum_spanning_tree.h"
-#include "hydra/utils/pgmo_mesh_traits.h"
+#include "hydra/utils/pgmo_mesh_traits.h"  // IWYU pragma: keep
 #include "hydra/utils/timing_utilities.h"
 
 namespace hydra {
+
+using hydra::timing::ScopedTimer;
+using kimera_pgmo::KimeraPgmoInterface;
+using pose_graph_tools::PoseGraph;
+
 namespace {
 
 static const auto registration =
@@ -58,24 +63,28 @@ static const auto registration =
                                    BackendModule,
                                    BackendModule::Config,
                                    SharedDsgInfo::Ptr,
-                                   SharedModuleState::Ptr,
-                                   LogSetup::Ptr>("BackendModule");
+                                   SharedModuleState::Ptr>("BackendModule");
 
-}
+void writeBackendStatus(const std::vector<BackendModuleStatus>& entries,
+                        const std::filesystem::path& filename) {
+  std::ofstream file(filename, std::ofstream::out);
+  // file format
+  file << "total_lc,new_lc,total_factors,total_values,new_factors,new_graph_"
+          "factors,trajectory_len,run_time,optimize_time,mesh_update_time,num_"
+          "merges_"
+          "undone\n";
 
-using hydra::timing::ScopedTimer;
-using kimera_pgmo::KimeraPgmoInterface;
-using pose_graph_tools::PoseGraph;
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  for (const auto& entry : entries) {
+    file << entry.total_loop_closures << "," << entry.new_loop_closures << ","
+         << entry.total_factors << "," << entry.total_values << "," << entry.new_factors
+         << "," << entry.new_graph_factors << "," << entry.trajectory_len << ","
+         << entry.last_spin_s.value_or(nan) << "," << entry.last_opt_s.value_or(nan)
+         << "," << entry.last_mesh_update_s.value_or(nan) << entry.num_merges_undone
+         << "\n";
+  }
 
-void BackendModuleStatus::reset() {
-  total_loop_closures = 0;
-  new_loop_closures = 0;
-  total_factors = 0;
-  total_values = 0;
-  new_factors = 0;
-  new_graph_factors = 0;
-  trajectory_len = 0;
-  num_merges_undone = 0;
+  file.close();
 }
 
 inline bool hasLoopClosure(const PoseGraph& graph) {
@@ -87,68 +96,37 @@ inline bool hasLoopClosure(const PoseGraph& graph) {
   return false;
 }
 
+}  // namespace
+
 void declare_config(BackendModule::Config& config) {
   using namespace config;
+  base<DsgUpdater::Config>(config);
   name("BackendConfig");
   field(config.pgmo, "pgmo");
   field(config.add_places_to_deformation_graph, "add_places_to_deformation_graph");
   field(config.optimize_on_lc, "optimize_on_lc");
-  field(config.enable_node_merging, "enable_node_merging");
-  field(config.enable_exhaustive_merging, "enable_exhaustive_merging");
-  field(config.max_external_loop_closure_time_difference,
-        "max_external_loop_closure_time_difference",
-        "s");
-  field(config.update_functors, "update_functors");
+  field(config.external_loop_closures, "external_loop_closures");
   field(config.sinks, "sinks");
-
-  check(config.max_external_loop_closure_time_difference,
-        GE,
-        0.0,
-        "max_external_loop_closure_time_difference");
 }
 
 BackendModule::BackendModule(const Config& config,
                              const SharedDsgInfo::Ptr& dsg,
-                             const SharedModuleState::Ptr& state,
-                             const LogSetup::Ptr& logs)
-    : KimeraPgmoInterface(),
+                             const SharedModuleState::Ptr& state)
+    : KimeraPgmoInterface(config.pgmo),
       config(config::checkValid(config)),
       private_dsg_(dsg),
-      state_(state) {
-  if (!KimeraPgmoInterface::initialize(config.pgmo)) {
-    throw std::runtime_error("invalid pgmo config");
-  }
-
-  setSolverParams();
-
-  // Keep a private "unmerged" copy of the frontend graph: merges are applied
-  // to the published graph, but findMerges/update functors always run against
-  // this unmerged version so a merge decision is never made twice.
+      state_(state),
+      external_lc_receiver_(config.external_loop_closures,
+                            &PipelineQueues::instance().external_loop_closure_queue) {
+  // set up frontend graph copy
   unmerged_graph_ = private_dsg_->graph->clone();
-  // Both graphs share a single mesh instance so deformation only happens once.
-  private_dsg_->graph->setMesh(std::make_shared<spark_dsg::Mesh>());
+  private_dsg_->graph->setMesh(GlobalInfo::instance().createMesh());
   unmerged_graph_->setMesh(private_dsg_->graph->mesh());
+  dsg_updater_.reset(new DsgUpdater(config, unmerged_graph_, private_dsg_));
+
+  // set up pgmo mesh infrastructure
   original_vertices_.reset(new pcl::PointCloud<pcl::PointXYZ>());
-  deformation_graph_->setForceRecalculate(!config.pgmo.gnc_fix_prev_inliers);
-  setSolverParams();
-
-  // Instantiate one update functor per configured layer (objects, places, ...).
-  for (const auto& [name, functor] : config.update_functors) {
-    update_functors_.push_back(functor.create());
-  }
-
-  if (logs && logs->valid()) {
-    logs_ = logs;
-    const auto log_path = logs->getLogDir("backend");
-    backend_graph_logger_.setOutputPath(log_path);
-    VLOG(1) << "[Hydra Backend] logging to " << log_path;
-    backend_graph_logger_.setLayerName(DsgLayers::OBJECTS, "objects");
-    backend_graph_logger_.setLayerName(DsgLayers::PLACES, "places");
-    backend_graph_logger_.setLayerName(DsgLayers::ROOMS, "rooms");
-    backend_graph_logger_.setLayerName(DsgLayers::BUILDINGS, "buildings");
-  } else {
-    VLOG(1) << "[Hydra Backend] logging disabled.";
-  }
+  vertex_stamps_.reset(new std::vector<uint64_t>());
 }
 
 BackendModule::~BackendModule() { stopImpl(); }
@@ -171,31 +149,25 @@ void BackendModule::stopImpl() {
 
 void BackendModule::stop() { stopImpl(); }
 
-void BackendModule::save(const LogSetup& log_setup) {
+void BackendModule::save(const DataDirectory& output) {
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto backend_path = log_setup.getLogDir("backend");
-  const auto pgmo_path = log_setup.getLogDir("backend/pgmo");
-  private_dsg_->graph->save(backend_path + "/dsg.json", false);
-  private_dsg_->graph->save(backend_path + "/dsg_with_mesh.json");
-  savePoseGraphSparseMapping(pgmo_path + "/sparsification_mapping.txt");
+  dsg_updater_->save(output, "backend");
 
+  const auto backend_path = output.path("backend");
+  backend_graph_logger_.save(backend_path);
+
+  const auto filename = output.path("backend/pgmo") / "dsg_pgmo_status.csv";
+  writeBackendStatus(status_log_, filename);
+
+  deformation_graph_->save(backend_path / "deformation_graph.dgrf");
   const auto& prefix = GlobalInfo::instance().getRobotPrefix();
   if (deformation_graph_->hasPrefixPoses(prefix.key)) {
     const auto optimized_path = getOptimizedTrajectory(prefix.id);
-    std::string csv_name = pgmo_path + "/traj_pgmo.csv";
+    std::string csv_name = backend_path / "trajectory.csv";
     saveTrajectory(optimized_path, timestamps_, csv_name);
   }
 
-  const auto mesh = private_dsg_->graph->mesh();
-  if (mesh && !mesh->empty()) {
-    // mesh implements vertex and face traits
-    kimera_pgmo::WriteMesh(backend_path + "/mesh.ply", *mesh, *mesh);
-  }
-
-  deformation_graph_->update();  // Update before saving
-  deformation_graph_->save(pgmo_path + "/deformation_graph.dgrf");
-
-  const std::string output_csv = backend_path + "/loop_closures.csv";
+  const std::string output_csv = backend_path / "loop_closures.csv";
   std::ofstream output_file;
   output_file.open(output_csv);
 
@@ -258,12 +230,10 @@ bool BackendModule::spinOnce(bool force_update) {
   }
 
   uint64_t timestamp_ns = 0;
+  status_log_.emplace_back(BackendModuleStatus{});
 
-  status_.reset();
   std::lock_guard<std::mutex> lock(mutex_);
   if (has_data) {
-    // Consume one frontend packet: fold its pose/mesh-graph edges into the
-    // factor graph and copy its mesh delta into the shared mesh.
     const auto packet = queue.front();
     queue.pop();
     const auto& input = *packet;
@@ -275,9 +245,8 @@ bool BackendModule::spinOnce(bool force_update) {
   }
 
   ScopedTimer timer("backend/update", timestamp_ns);
-  // Drain loop closures detected by the LCD module into the factor graph.
   updateFromLcdQueue();
-  status_.total_loop_closures = num_loop_closures_;
+  status_log_.back().total_loop_closures = num_loop_closures_;
 
   if (!updatePrivateDsg(timestamp_ns, force_update)) {
     VLOG(2) << "Backend skipping input @ " << timestamp_ns << " [ns]";
@@ -289,19 +258,17 @@ bool BackendModule::spinOnce(bool force_update) {
   }
 
   timer.reset("backend/spin");
-  // Full optimization (deformation-graph solve) only runs when a loop closure
-  // warrants it or the caller forces it. Otherwise just refresh the mesh and
-  // propagate topology to the published graph without re-solving.
   if ((config.optimize_on_lc && have_loopclosures_) || force_optimize_) {
     optimize(timestamp_ns);
   } else {
     updateDsgMesh(timestamp_ns);
-    callUpdateFunctions(timestamp_ns);
+    auto info = std::make_shared<UpdateInfo>();
+    info->timestamp_ns = timestamp_ns;
+    info->current_deformation_graph = deformation_graph_.get();
+    dsg_updater_->callUpdateFunctions(timestamp_ns, info);
   }
 
-  if (logs_) {
-    logStatus();
-  }
+  logStatus();
 
   ScopedTimer sink_timer("backend/sinks", timestamp_ns);
   Sink::callAll(sinks_, timestamp_ns, *private_dsg_->graph, *deformation_graph_);
@@ -351,36 +318,22 @@ void BackendModule::addSink(const Sink::Ptr& sink) {
   }
 }
 
-void BackendModule::addPreUpdateSink(const Sink::Ptr& sink) {
-  if (sink) {
-    pre_update_sinks_.push_back(sink);
-  }
-}
-
-void BackendModule::setSolverParams() {
-  KimeraRPGO::RobustSolverParams params = deformation_graph_->getParams();
-  params.verbosity = config.pgmo.rpgo_verbosity;
-  params.solver = config.pgmo.rpgo_solver;
-  if (logs_) {
-    params.logOutput(logs_->getLogDir("backend/pgmo"));
-    logStatus(true);
-  }
-  deformation_graph_->setParams(params);
-  setVerboseFlag(false);
-}
-
 void BackendModule::updateFactorGraph(const BackendInput& input) {
   ScopedTimer timer("backend/process_factors", input.timestamp_ns);
   const size_t prev_loop_closures = num_loop_closures_;
-  status_.new_graph_factors = input.deformation_graph.edges.size();
-  status_.new_factors += input.deformation_graph.edges.size();
+  status_log_.back().new_graph_factors = input.deformation_graph.edges.size();
+  status_log_.back().new_factors += input.deformation_graph.edges.size();
 
-  // Add the incremental mesh deformation-graph edges from this packet.
+  std::vector<size_t> inc_mesh_indices;
+  std::vector<uint64_t> inc_mesh_index_stamps;
+
   if (!input.deformation_graph.nodes.empty() &&
       !input.deformation_graph.edges.empty()) {
     try {
-      processIncrementalMeshGraph(
-          input.deformation_graph, timestamps_, unconnected_nodes_);
+      processIncrementalMeshGraph(input.deformation_graph,
+                                  timestamps_,
+                                  inc_mesh_indices,
+                                  inc_mesh_index_stamps);
     } catch (const gtsam::ValuesKeyDoesNotExist& e) {
       LOG(ERROR) << input.deformation_graph;
       throw std::logic_error(e.what());
@@ -390,16 +343,16 @@ void BackendModule::updateFactorGraph(const BackendInput& input) {
              << input.timestamp_ns << " [ns]";
   }
 
-  // Add each agent pose-graph message (odometry plus any embedded loop closures).
   for (const auto& msg : input.agent_updates.pose_graphs) {
-    status_.new_factors += msg.edges.size();
+    status_log_.back().new_factors += msg.edges.size();
 
     VLOG(5) << "[Hydra Backend] Adding pose graph message: " << msg;
     if (hasLoopClosure(msg)) {
       LOG(INFO) << "[Hydra Backend] Input pose graph has loop closure @ "
                 << msg.stamp_ns << " [ns]";
     }
-    processIncrementalPoseGraph(msg, trajectory_, timestamps_, unconnected_nodes_);
+    processIncrementalPoseGraph(
+        msg, inc_mesh_indices, inc_mesh_index_stamps, trajectory_, timestamps_);
     logIncrementalLoopClosures(msg);
   }
 
@@ -410,7 +363,15 @@ void BackendModule::updateFactorGraph(const BackendInput& input) {
     have_new_loopclosures_ = true;
   }
 
-  updateExternalLoopClosures();
+  external_lc_receiver_.update(
+      *unmerged_graph_,
+      [this](NodeId to_node, NodeId from_node, const gtsam::Pose3 to_T_from) {
+        LoopClosureLog lc{to_node, from_node, to_T_from, true, 1};
+        addLoopClosure(
+            lc.src, lc.dest, lc.src_T_dest, (KimeraPgmoInterface::config_.lc_variance));
+        loop_closures_.push_back(lc);
+        ++num_loop_closures_;
+      });
 
   if (num_loop_closures_ > prev_loop_closures) {
     LOG(WARNING) << "New loop closures detected!";
@@ -418,13 +379,13 @@ void BackendModule::updateFactorGraph(const BackendInput& input) {
   }
 
   if (num_loop_closures_ > 0) {
-    status_.new_loop_closures = num_loop_closures_ - prev_loop_closures;
+    status_log_.back().new_loop_closures = num_loop_closures_ - prev_loop_closures;
     have_loopclosures_ = true;
   }
 
-  status_.trajectory_len = trajectory_.size();
-  status_.total_factors = deformation_graph_->getGtsamFactors().size();
-  status_.total_values = deformation_graph_->getGtsamValues().size();
+  status_log_.back().trajectory_len = trajectory_.size();
+  status_log_.back().total_factors = deformation_graph_->getFactors()->size();
+  status_log_.back().total_values = deformation_graph_->getValues()->size();
 }
 
 bool BackendModule::updateFromLcdQueue() {
@@ -436,8 +397,6 @@ bool BackendModule::updateFromLcdQueue() {
     // connects frames "to -> from" (i.e. src = to, dest = from, pose = to_T_from)
     const gtsam::Pose3 to_T_from(gtsam::Rot3(result.to_R_from), result.to_p_from);
     LoopClosureLog lc{result.to_node, result.from_node, to_T_from, true, result.level};
-    // Agent-level (level 0) and scene-graph-level loop closures use different
-    // measurement variances.
     addLoopClosure(lc.src,
                    lc.dest,
                    lc.src_T_dest,
@@ -450,7 +409,7 @@ bool BackendModule::updateFromLcdQueue() {
     have_loopclosures_ = true;
     have_new_loopclosures_ = true;
     num_loop_closures_++;
-    status_.new_loop_closures++;
+    status_log_.back().new_loop_closures++;
   }
 
   return added_new_loop_closure;
@@ -463,41 +422,25 @@ void BackendModule::copyMeshDelta(const BackendInput& input) {
     return;
   }
 
-  // TODO: this is ugly, but no good way to know at backend init whether
-  // we're tracking first-seen stamps or not (because that's private to the active
-  // window map). On the first delta, enable stamp tracking if the frontend sent them.
-  if (input.mesh_stamp_update && !private_dsg_->graph->mesh()->numVertices()) {
-    const_cast<bool&>(private_dsg_->graph->mesh()->has_first_seen_stamps) = true;
-  }
-
-  // Apply the vertex/face delta (and optional per-vertex stamps) to the shared mesh.
-  input.mesh_update->updateMesh(*private_dsg_->graph->mesh());
-  if (input.mesh_stamp_update) {
-    input.mesh_stamp_update->updateMesh(*private_dsg_->graph->mesh(),
-                                        input.mesh_update->vertex_start);
-  }
-
-  // Cache the undeformed vertex positions; deformation always starts from these.
-  kimera_pgmo::StampedCloud<pcl::PointXYZ> cloud_out{*original_vertices_,
-                                                     vertex_stamps_};
-  input.mesh_update->updateVertices(cloud_out);
-  // we use this to make sure that deformation only happens for vertices that are
-  // still active
-  num_archived_vertices_ = input.mesh_update->getTotalArchivedVertices();
-  utils::updatePlaces2d(private_dsg_, *input.mesh_update, num_archived_vertices_);
+  {  // mesh critical section
+    std::lock_guard<std::mutex> graph_lock(private_dsg_->mutex);
+    input.mesh_update->updateMesh(*private_dsg_->graph->mesh(), mesh_offsets_);
+    kimera_pgmo::StampedCloud<pcl::PointXYZ> cloud_out{*original_vertices_,
+                                                       *vertex_stamps_};
+    input.mesh_update->updateVertices(cloud_out);
+    utils::updatePlaces2d(private_dsg_, mesh_offsets_);
+  }  // mesh critical section
 
   have_new_mesh_ = true;
 }
 
 bool BackendModule::updatePrivateDsg(size_t timestamp_ns, bool force_update) {
-  std::unique_lock<std::mutex> graph_lock(private_dsg_->mutex);
+  std::lock_guard<std::mutex> graph_lock(private_dsg_->mutex);
   {  // start joint critical section
     ScopedTimer timer("backend/read_graph", timestamp_ns);
 
     const auto& shared_dsg = *state_->backend_graph;
-    std::unique_lock<std::mutex> shared_graph_lock(shared_dsg.mutex);
-    // Only pull from the frontend once we've consumed all factor-graph packets
-    // up to the latest published sequence number (unless forced).
+    std::lock_guard<std::mutex> shared_graph_lock(shared_dsg.mutex);
     if (!force_update && shared_dsg.sequence_number != last_sequence_number_) {
       return false;
     }
@@ -505,10 +448,7 @@ bool BackendModule::updatePrivateDsg(size_t timestamp_ns, bool force_update) {
     unmerged_graph_->mergeGraph(*shared_dsg.graph);
   }  // end joint critical section
 
-  if (logs_) {
-    backend_graph_logger_.logGraph(*private_dsg_->graph);
-  }
-
+  backend_graph_logger_.logGraph(*private_dsg_->graph);
   return true;
 }
 
@@ -516,71 +456,16 @@ void BackendModule::addLoopClosure(const gtsam::Key& src,
                                    const gtsam::Key& dest,
                                    const gtsam::Pose3& src_T_dest,
                                    double variance) {
-  if (full_sparse_frame_map_.size() == 0 ||
-      !KimeraPgmoInterface::config_.b_enable_sparsify) {
-    if (dest == src + 1) {
-      // DeformationGraph::processNewBetween treats key_to == key_from + 1
-      // as a new odometry edge and inserts key_to into new_values_ without
-      // checking existence (deformation_graph.cpp:256-258, 295). For an
-      // LC, key_to already exists and the insert throws std::bad_cast.
-      // Skip these — the LC's main purpose (constraining the trajectory)
-      // is still served by the sibling odometry edge.
-      LOG(WARNING) << "[Hydra Backend] Skipping LC " << gtsam::Symbol(src)
-                   << " -> " << gtsam::Symbol(dest)
-                   << " (consecutive keys would trip PGMO's "
-                      "updatePoseGraphInitialGuess insert)";
-      return;
-    }
-    deformation_graph_->processNewBetween(src, dest, src_T_dest, variance);
-  } else {
-    if (!full_sparse_frame_map_.count(src) || !full_sparse_frame_map_.count(dest)) {
-      // TODO: this happened a few times when loop closure found for node that has
-      // not yet been received
-      LOG(ERROR)
-          << "Attempted to add loop closure with node not yet processed by PGMO.\n";
-      return;
-    }
-    // Map the dense trajectory keys to their sparsified representatives, then
-    // compose the relative transform through the keyed offsets of each sparse node.
-    gtsam::Key sparse_src = full_sparse_frame_map_.at(src);
-    gtsam::Key sparse_dest = full_sparse_frame_map_.at(dest);
-    if (sparse_src == sparse_dest) {
-      // Both endpoints sparsified to the same node: the LC degenerates
-      // to a self-loop. Drop it.
-      LOG(WARNING) << "[Hydra Backend] Skipping LC " << gtsam::Symbol(src)
-                   << " -> " << gtsam::Symbol(dest)
-                   << " (sparsified to same key " << gtsam::Symbol(sparse_src)
-                   << ")";
-      return;
-    }
-    if (sparse_dest == sparse_src + 1) {
-      // Same odometry-edge collision as above, but in the sparse frame.
-      // Common for level-0 (BowAgentSolver) LCs whose endpoints happen to
-      // land on sparse keys 1 apart. Skip — the consecutive sparse-edge
-      // odometry constraint already covers the relationship.
-      LOG(WARNING) << "[Hydra Backend] Skipping LC " << gtsam::Symbol(src)
-                   << " -> " << gtsam::Symbol(dest) << " (sparse "
-                   << gtsam::Symbol(sparse_src) << " -> "
-                   << gtsam::Symbol(sparse_dest)
-                   << ", consecutive sparse keys trip PGMO's "
-                      "updatePoseGraphInitialGuess insert)";
-      return;
-    }
-    gtsam::Pose3 sparse_src_T_sparse_dest =
-        sparse_frames_.at(sparse_src).keyed_transforms.at(src) * src_T_dest *
-        sparse_frames_.at(sparse_dest).keyed_transforms.at(dest).inverse();
-    deformation_graph_->processNewBetween(
-        sparse_src, sparse_dest, sparse_src_T_sparse_dest, variance);
-  }
+  deformation_graph_->processNewBetween(src, dest, src_T_dest, variance);
 }
 
 void BackendModule::updateDsgMesh(size_t timestamp_ns, bool force_mesh_update) {
-  deformation_graph_->update();
   if (!force_mesh_update && !have_new_mesh_) {
     return;
   }
 
   have_new_mesh_ = false;
+
   auto mesh = private_dsg_->graph->mesh();
   if (!mesh || mesh->empty()) {
     return;
@@ -594,94 +479,20 @@ void BackendModule::updateDsgMesh(size_t timestamp_ns, bool force_mesh_update) {
   }
 
   ScopedTimer timer("backend/mesh_deformation", timestamp_ns);
+
   VLOG(2) << "Deforming mesh with " << mesh->numVertices() << " vertices";
 
-  // Deform from the cached undeformed vertices using the optimized control
-  // points, only re-deforming vertices past the previously archived count.
   kimera_pgmo::ConstStampedCloud<pcl::PointXYZ> cloud_in{*original_vertices_,
-                                                         vertex_stamps_};
+                                                         *vertex_stamps_};
   deformation_graph_->deformPoints(*private_dsg_->graph->mesh(),
                                    cloud_in,
                                    GlobalInfo::instance().getRobotPrefix().vertex_key,
-                                   deformation_graph_->getGtsamValues(),
+                                   *deformation_graph_->getValues(),
                                    KimeraPgmoInterface::config_.num_interp_pts,
                                    KimeraPgmoInterface::config_.interp_horizon,
                                    nullptr,
-                                   prev_num_archived_vertices_);
-  prev_num_archived_vertices_ = num_archived_vertices_;
-}
-
-std::optional<NodeId> BackendModule::findClosestAgentId(uint64_t stamp_ns,
-                                                        std::optional<int> robot_id,
-                                                        double max_diff_s) const {
-  const auto prefix = robot_id ? RobotPrefixConfig(robot_id.value()).key
-                               : GlobalInfo::instance().getRobotPrefix().key;
-  const auto& layer = unmerged_graph_->getLayer(DsgLayers::AGENTS, prefix);
-  const auto stamp = std::chrono::nanoseconds(stamp_ns);
-  auto closest =
-      std::min_element(layer.nodes().begin(),
-                       layer.nodes().end(),
-                       [stamp](const auto& lhs, const auto& rhs) {
-                         const auto diff_lhs = lhs->timestamp.value() - stamp;
-                         const auto diff_rhs = rhs->timestamp.value() - stamp;
-                         return std::abs(diff_lhs.count()) < std::abs(diff_rhs.count());
-                       });
-  if (closest == layer.nodes().end()) {
-    LOG(ERROR) << "[Hydra Backend] No nodes exist for agent layer '" << prefix
-               << "' when looking up timestamp " << stamp_ns << " [ns]";
-    return std::nullopt;
-  }
-
-  const auto& best_node = *closest;
-  // NOTE: It's heuristic, but occasionally,
-  // during Hydra's mesh generation process, a delay can occur,
-  // causing the most recently stored node in `timestamps_` to be mistakenly
-  // identified as the closest node. This needs to be rejected.
-  const auto diff_s = std::chrono::duration_cast<std::chrono::duration<double>>(
-                          best_node->timestamp.value() - stamp)
-                          .count();
-  VLOG(5) << "[Hydra Backend] Found node " << NodeSymbol(best_node->id).getLabel()
-          << " with difference of " << diff_s << " [s] for timestamp " << stamp_ns
-          << " [ns]";
-  if (max_diff_s && std::abs(diff_s) >= max_diff_s) {
-    LOG(WARNING) << "[Hydra Backend] Nearest node "
-                 << NodeSymbol(best_node->id).getLabel()
-                 << " has too large of a time difference: " << diff_s
-                 << " [s] >= " << max_diff_s << " [s]";
-    return std::nullopt;
-  }
-
-  return best_node->id;
-}
-
-void BackendModule::updateExternalLoopClosures() {
-  auto& queue = PipelineQueues::instance().external_loop_closure_queue;
-  while (!queue.empty()) {
-    const auto lcd_message = queue.pop();
-    for (const auto& edge : lcd_message.edges) {
-      // NOTE: the pose graph edge IDs contain the loop closure timestamps, not the
-      // keyframe IDs
-      const auto max_diff_s = config.max_external_loop_closure_time_difference;
-      const auto from_node =
-          findClosestAgentId(edge.key_from, std::nullopt, max_diff_s);
-      const auto to_node = findClosestAgentId(edge.key_to, std::nullopt, max_diff_s);
-      if (!from_node || !to_node) {
-        LOG(WARNING) << "[Hydra Backend] dropped external loop closure: " << edge;
-        continue;
-      }
-
-      const gtsam::Pose3 to_T_from(edge.pose.matrix());
-      LoopClosureLog lc = LoopClosureLog{*to_node, *from_node, to_T_from, true, 1};
-
-      addLoopClosure(
-          lc.src, lc.dest, lc.src_T_dest, (KimeraPgmoInterface::config_.lc_variance));
-      loop_closures_.push_back(lc);
-
-      have_loopclosures_ = true;
-      have_new_loopclosures_ = true;
-      num_loop_closures_++;
-    }
-  }
+                                   last_deformed_vertices_);
+  last_deformed_vertices_ = mesh_offsets_.archived_vertices;
 }
 
 void BackendModule::updateAgentNodeMeasurements(const PoseGraph& meas) {
@@ -696,9 +507,7 @@ void BackendModule::updateAgentNodeMeasurements(const PoseGraph& meas) {
   deformation_graph_->processNodeMeasurements(agent_measurements);
 }
 
-void BackendModule::optimize(size_t timestamp_ns) {
-  // Optionally tie the places layer into the deformation graph so the solve
-  // also corrects place positions, not just mesh and trajectory.
+void BackendModule::optimize(size_t timestamp_ns, bool force_find_merge) {
   if (config.add_places_to_deformation_graph) {
     const auto vertex_key = GlobalInfo::instance().getRobotPrefix().vertex_key;
     addPlacesToDeformationGraph(*unmerged_graph_,
@@ -710,161 +519,25 @@ void BackendModule::optimize(size_t timestamp_ns) {
   }
 
   {  // timer scope
-    // Solve the robust pose-graph/deformation problem (the loop-closure-driven
-    // global correction).
-    ScopedTimer timer("backend/optimization", timestamp_ns, true, 0, false);
-    deformation_graph_->optimize();
+    ScopedTimer timer("dsg_updater/optimization", timestamp_ns, true, 0, false);
+    KimeraPgmoInterface::optimize();
   }  // timer scope
 
-  // Force a mesh deformation against the freshly optimized values, then push the
-  // optimized node positions into the published graph layers.
-  updateDsgMesh(timestamp_ns, true);
+  updateDsgMesh(timestamp_ns);
 
-  callUpdateFunctions(timestamp_ns,
-                      deformation_graph_->getGtsamTempValues(),
-                      deformation_graph_->getGtsamValues(),
-                      have_new_loopclosures_);
+  UpdateInfo::ConstPtr info(new UpdateInfo{timestamp_ns,
+                                           config.add_places_to_deformation_graph
+                                               ? deformation_graph_->getTempValues()
+                                               : nullptr,
+                                           deformation_graph_->getValues(),
+                                           have_new_loopclosures_ || force_find_merge,
+                                           {},
+                                           deformation_graph_.get(),
+                                           nullptr,
+                                           mesh_offsets_,
+                                           deformation_graph_.get()});
+  dsg_updater_->callUpdateFunctions(timestamp_ns, info);
   have_new_loopclosures_ = false;
-}
-
-void BackendModule::resetBackendDsg(size_t timestamp_ns) {
-  ScopedTimer timer("backend/reset_dsg", timestamp_ns, true, 0, false);
-  {
-    std::unique_lock<std::mutex> graph_lock(private_dsg_->mutex);
-    // First reset private graph
-    private_dsg_->graph->clear();
-  }
-
-  // Rebuild the published graph from the unmerged copy and drop all merge state,
-  // so previously applied merges can be reconsidered from scratch.
-  // TODO: this might break mesh stuff
-  private_dsg_->graph->mergeGraph(*unmerged_graph_);
-  private_dsg_->merges.clear();
-  merge_tracker.clear();
-  deformation_graph_->setRecalculateVertices();
-  reset_backend_dsg_ = false;
-}
-
-void BackendModule::callUpdateFunctions(size_t timestamp_ns,
-                                        const gtsam::Values& places_values,
-                                        const gtsam::Values& pgmo_values,
-                                        bool new_loop_closure,
-                                        const UpdateInfo::LayerMerges& given_merges,
-                                        const NodeToRobotMap* node_to_robot) {
-  ScopedTimer spin_timer("backend/update_layers", timestamp_ns);
-
-  // Only let functors discover new merges when no externally given merges were
-  // supplied for this pass.
-  // TODO: chance that this causes weirdness when we have multiple nodes but no
-  // accepted reconciliation merges
-  const bool enable_merging = given_merges.empty() ? config.enable_node_merging : false;
-
-  // Reconstruct dense agent poses from the sparse PGMO values for functor use.
-  const auto complete_agent_values =
-      utils::getDenseFrames(full_sparse_frame_map_, sparse_frames_, pgmo_values);
-  // TODO: given_merges probably doesn't need to be passed
-  UpdateInfo::ConstPtr info(
-      new UpdateInfo{config.add_places_to_deformation_graph ? &places_values : nullptr,
-                     &pgmo_values,
-                     new_loop_closure,
-                     timestamp_ns,
-                     given_merges,
-                     &complete_agent_values,
-                     deformation_graph_.get(),
-                     node_to_robot});
-
-  // merge topological changes to private dsg, respecting merges
-  // attributes may be overwritten, but ideally we don't bother
-  GraphMergeConfig merge_config;
-  merge_config.previous_merges = &private_dsg_->merges;
-  merge_config.update_dynamic_attributes = false;
-  private_dsg_->graph->mergeGraph(*unmerged_graph_, merge_config);
-
-  // Pre-update sinks write external state into the graph (e.g. flow
-  // summaries) so functors below see it in this same iteration.
-  Sink::callAll(pre_update_sinks_,
-                timestamp_ns,
-                *private_dsg_->graph,
-                *deformation_graph_);
-
-  // Run each layer's update functor in turn: first push optimized geometry into
-  // the published graph, then (optionally) discover and apply node merges.
-  std::list<LayerCleanupFunc> cleanup_hooks;
-  for (const auto& functor : update_functors_) {
-    // TODO: keep track of names and push timing here
-    if (!functor) {
-      continue;
-    }
-
-    // Cleanup hooks run once at the end after all functors have updated.
-    const auto hooks = functor->hooks();
-    if (hooks.cleanup) {
-      cleanup_hooks.push_back(hooks.cleanup);
-    }
-
-    functor->call(*unmerged_graph_, *private_dsg_, info);
-    if (enable_merging) {
-      // Find merges against the unmerged graph and apply them to the published
-      // graph; the tracker records each so it is never reapplied.
-      // TODO: handle given merges
-      const auto merges = functor->findMerges(*unmerged_graph_, info);
-      const auto applied = merge_tracker.applyMerges(
-          *unmerged_graph_, merges, *private_dsg_, hooks.merge);
-      VLOG(1) << "Found " << merges.size() << " merges (applied " << applied << ")";
-
-      if (config.enable_exhaustive_merging) {
-        // Keep re-running merge discovery on the already-merged graph until it
-        // reaches a fixed point (a merge can expose further merge candidates).
-        size_t merge_iter = 0;
-        size_t num_applied = 0;
-        do {
-          const auto new_merges = functor->findMerges(*private_dsg_->graph, info);
-          num_applied = merge_tracker.applyMerges(
-              *private_dsg_->graph, new_merges, *private_dsg_, hooks.merge);
-          VLOG(1) << "Found " << new_merges.size() << " merges at pass " << merge_iter
-                  << " (" << num_applied << " applied)";
-          ++merge_iter;
-        } while (num_applied > 0);
-      }
-    }
-  }
-
-  launchCallbacks(cleanup_hooks, info, private_dsg_.get());
-}
-
-void BackendModule::logStatus(bool init) const {
-  if (!logs_) {
-    return;
-  }
-
-  const auto filename = logs_->getLogDir("backend/pgmo") + "/dsg_pgmo_status.csv";
-
-  std::ofstream file;
-  if (init) {
-    LOG(INFO) << "[Hydra Backend] logging PGMO status output to " << filename;
-    file.open(filename);
-    // file format
-    file << "total_lc,new_lc,total_factors,total_values,new_factors,new_graph_"
-            "factors,trajectory_len,run_time,optimize_time,mesh_update_time,num_"
-            "merges_"
-            "undone\n";
-    file.close();
-    return;
-  }
-
-  const auto& timer = hydra::timing::ElapsedTimeRecorder::instance();
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  file.open(filename, std::ofstream::out | std::ofstream::app);
-  file << status_.total_loop_closures << "," << status_.new_loop_closures << ","
-       << status_.total_factors << "," << status_.total_values << ","
-       << status_.new_factors << "," << status_.new_graph_factors << ","
-       << status_.trajectory_len << ","
-       << timer.getLastElapsed("backend/spin").value_or(nan) << ","
-       << timer.getLastElapsed("backend/optimization").value_or(nan) << ","
-       << timer.getLastElapsed("backend/mesh_update").value_or(nan) << ","
-       << status_.num_merges_undone << std::endl;
-  file.close();
-  return;
 }
 
 void BackendModule::logIncrementalLoopClosures(const PoseGraph& msg) {
@@ -881,6 +554,18 @@ void BackendModule::logIncrementalLoopClosures(const PoseGraph& msg) {
     // connects frames "to -> from" (i.e. src = to, dest = from, pose = to_T_from)
     loop_closures_.push_back({src_key, dest_key, pose, false, 0});
   }
+}
+
+void BackendModule::logStatus() {
+  if (status_log_.empty()) {
+    return;
+  }
+
+  auto& status = status_log_.back();
+  const auto& timer = hydra::timing::ElapsedTimeRecorder::instance();
+  status.last_spin_s = timer.getLastElapsed("backend/spin");
+  status.last_opt_s = timer.getLastElapsed("backend/optimization");
+  status.last_mesh_update_s = timer.getLastElapsed("backend/mesh_update");
 }
 
 }  // namespace hydra

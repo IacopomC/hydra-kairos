@@ -40,14 +40,6 @@
 
 #include "hydra/backend/backend_module.h"
 
-/**
- * @file zmq_interfaces.h
- * @brief Backend components that exchange data over ZeroMQ. One sink publishes
- *        the optimized scene graph (and optionally its mesh) to subscribers; one
- *        update functor receives externally assigned room labels and applies
- *        them to the rooms layer.
- */
-
 namespace spark_dsg {
 class ZmqReceiver;
 class ZmqSender;
@@ -55,65 +47,51 @@ class ZmqSender;
 
 namespace hydra {
 
-/// @brief Output sink that publishes the optimized scene graph over ZeroMQ.
 class ZmqSink : public BackendModule::Sink {
  public:
   struct Config {
-    std::string url = "tcp://127.0.0.1:8001";  ///< Address the graph is published on.
-    bool send_mesh = true;                     ///< Whether the mesh is included in the published graph.
-    size_t num_threads = 2;                    ///< Worker threads used by the publisher.
+    std::string url = "tcp://127.0.0.1:8001";
+    bool send_mesh = true;
+    size_t num_threads = 2;
   } const config;
 
-  /// @brief Constructs the sink and opens the publishing socket.
   explicit ZmqSink(const Config& config);
   virtual ~ZmqSink();
-  /// @brief Publishes the current scene graph to subscribers.
-  /// @param timestamp_ns Timestamp of the graph (ns).
-  /// @param graph Scene graph to publish.
-  /// @param dgraph Deformation graph accompanying the scene graph.
   void call(uint64_t timestamp_ns,
             const DynamicSceneGraph& graph,
             const kimera_pgmo::DeformationGraph& dgraph) const override;
-  /// @brief Returns a human-readable description of the sink.
   std::string printInfo() const override;
 
  private:
-  std::unique_ptr<spark_dsg::ZmqSender> sender_;  ///< Underlying ZeroMQ publisher.
+  std::unique_ptr<spark_dsg::ZmqSender> sender_;
 };
 
-/// @brief Declares the configuration fields for ZmqSink.
 void declare_config(ZmqSink::Config& config);
 
-/// @brief Update functor that applies externally received room labels over ZeroMQ.
 class ZmqRoomLabelUpdater : public UpdateFunctor {
  public:
   struct Config {
-    std::string url = "tcp://127.0.0.1:8002";  ///< Address room labels are received on.
-    size_t num_threads = 2;                    ///< Worker threads used by the receiver.
-    size_t poll_time_ms = 10;                  ///< Receiver poll interval (ms).
+    std::string url = "tcp://127.0.0.1:8002";
+    size_t num_threads = 2;
+    size_t poll_time_ms = 10;
   } const config;
 
-  /// @brief Constructs the updater and starts the background receive thread.
   ZmqRoomLabelUpdater(const Config& config);
   virtual ~ZmqRoomLabelUpdater();
-  /// @brief Applies the most recently received room labels to the rooms layer.
-  /// @param graph Shared graph whose room names are updated.
   void call(const DynamicSceneGraph&,
             SharedDsgInfo& graph,
             const UpdateInfo::ConstPtr&) const override;
 
  private:
-  /// @brief Drains pending label messages from the receiver into the name map.
   void checkForUpdates();
 
-  mutable std::mutex mutex_;                    ///< Guards the room-name map against the receive thread.
-  std::unique_ptr<std::thread> thread_;         ///< Background thread polling for incoming labels.
-  std::atomic<bool> should_shutdown_{false};    ///< Signals the receive thread to stop.
-  std::unique_ptr<spark_dsg::ZmqReceiver> receiver_;  ///< Underlying ZeroMQ subscriber.
-  std::map<NodeId, std::string> room_name_map_;  ///< Latest received label for each room node.
+  mutable std::mutex mutex_;
+  std::unique_ptr<std::thread> thread_;
+  std::atomic<bool> should_shutdown_{false};
+  std::unique_ptr<spark_dsg::ZmqReceiver> receiver_;
+  std::map<NodeId, std::string> room_name_map_;
 };
 
-/// @brief Declares the configuration fields for ZmqRoomLabelUpdater.
 void declare_config(ZmqRoomLabelUpdater::Config& conf);
 
 }  // namespace hydra

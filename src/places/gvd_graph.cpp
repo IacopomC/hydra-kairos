@@ -70,7 +70,7 @@ const GvdMemberInfo* GvdGraph::getNode(uint64_t node) const {
 }
 
 GvdMemberInfo* GvdGraph::getNode(uint64_t node) {
-  // TODO: make this not throw out-of-range
+  // TODO(nathan) make this not throw out-of-range
   return &nodes_.at(node);
 }
 

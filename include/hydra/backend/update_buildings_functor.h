@@ -37,28 +37,16 @@
 
 #include "hydra/backend/update_functions.h"
 
-/**
- * @file update_buildings_functor.h
- * @brief Update functor for the buildings layer. Maintains a single building
- *        node placed at the centroid of all rooms and parents every room to it;
- *        the building node is removed when no rooms remain.
- */
-
 namespace hydra {
 
-/// @brief Maintains the building node summarizing the rooms layer.
 struct UpdateBuildingsFunctor : public UpdateFunctor {
   struct Config {
-    SemanticNodeAttributes::Label semantic_label = 22u;  ///< Semantic label assigned to the building node.
+    //! Semantic label assigned to every building node
+    SemanticNodeAttributes::Label semantic_label = 22u;
   } const config;
 
-  /// @brief Constructs the functor from a validated configuration.
   explicit UpdateBuildingsFunctor(const Config& config);
 
-  /// @brief Places the building node at the room centroid and reparents the rooms.
-  /// @param unmerged Graph holding the original, unmerged nodes.
-  /// @param dsg Shared graph whose building node is maintained.
-  /// @param info Per-iteration context.
   void call(const DynamicSceneGraph& unmerged,
             SharedDsgInfo& dsg,
             const UpdateInfo::ConstPtr& info) const override;
@@ -69,7 +57,6 @@ struct UpdateBuildingsFunctor : public UpdateFunctor {
           "UpdateBuildingsFunctor");
 };
 
-/// @brief Declares the configuration fields for UpdateBuildingsFunctor.
 void declare_config(UpdateBuildingsFunctor::Config& config);
 
 }  // namespace hydra

@@ -37,24 +37,21 @@
 
 #include "hydra/common/shared_dsg_info.h"
 
-/**
- * @file shared_module_state.h
- * @brief State shared between pipeline modules beyond the primary scene graphs,
- *        holding the scene-graph views handed to the loop-closure and backend
- *        modules.
- */
-
 namespace hydra {
 
-/// @brief Bundle of shared scene-graph views passed between modules.
 struct SharedModuleState {
   using Ptr = std::shared_ptr<SharedModuleState>;
   SharedModuleState();
 
   ~SharedModuleState();
 
-  SharedDsgInfo::Ptr lcd_graph;      ///< Scene graph view used by loop-closure detection.
-  SharedDsgInfo::Ptr backend_graph;  ///< Scene graph view used by the backend.
+  // mutexes are considered ordered (for avoiding deadlock):
+  // 1. SharedDsgInfo::mutex (lcd)
+  // 2. SharedDsgInfo::mutex (backend)
+  // 3. SharedDsgInfo::mutex (frontend)
+  // When acquiring two mutexes, always acquire the lowest mutex first
+  SharedDsgInfo::Ptr lcd_graph;
+  SharedDsgInfo::Ptr backend_graph;
 };
 
 }  // namespace hydra

@@ -39,8 +39,6 @@
 
 namespace hydra {
 
-// Build the eight {0,1}^3 corner offsets of a unit cube by reading each bit of i as one
-// axis (x = lsb, y = 2nd lsb, z = 3rd lsb).
 Eigen::Matrix<int, 3, 8> getCubeOffsets() {
   Eigen::Matrix<int, 3, 8> offsets;
   for (size_t i = 0; i < 8; ++i) {
@@ -65,8 +63,6 @@ DownsampleTsdfInterpolator::DownsampleTsdfInterpolator(const Config& config)
 
 TsdfLayer::Ptr DownsampleTsdfInterpolator::interpolate(
     const TsdfLayer& input, const BlockIndices* to_use) const {
-  // Coarsen by the configured integer ratio: larger voxels, fewer per block. The block
-  // size (voxel_size * voxels_per_side) is preserved so block indices stay aligned.
   const auto new_vs = input.voxel_size * config.ratio;
   const auto new_vps = input.voxels_per_side / config.ratio;
   if (new_vps <= 1) {
@@ -86,13 +82,11 @@ TsdfLayer::Ptr DownsampleTsdfInterpolator::interpolate(
     for (size_t i = 0; i < new_block.numVoxels(); ++i) {
       auto& new_voxel = new_block.getVoxel(i);
 
-      // Map this coarse voxel back to a reference corner in the fine grid: scale by the
-      // ratio, then shift to the center of the fine block it covers.
+      // get top-level corner of 2x2x2 cube
       const auto new_idx = new_block.getVoxelIndex(i);
       const VoxelIndex old_idx = config.ratio * new_idx + center_offset;
 
-      // Weighted sum over the 2x2x2 fine voxels around the reference corner. Color is
-      // accumulated as float to avoid 8-bit overflow.
+      // float required to avoid overflow
       Eigen::Vector4f new_color = Eigen::Vector4f::Zero();
       for (size_t i = 0; i < 8; ++i) {
         const auto& voxel = old_block.getVoxel(old_idx - offsets.col(i));
@@ -109,13 +103,12 @@ TsdfLayer::Ptr DownsampleTsdfInterpolator::interpolate(
         continue;  // all voxels are unobserved, skip distance and color computation
       }
 
-      // Normalize the weighted sums to recover averaged distance and color.
+      // finalize the weight average
       new_voxel.color.r = std::round(new_color(0) / new_voxel.weight);
       new_voxel.color.g = std::round(new_color(1) / new_voxel.weight);
       new_voxel.color.b = std::round(new_color(2) / new_voxel.weight);
       new_voxel.color.a = std::round(new_color(3) / new_voxel.weight);
       new_voxel.distance /= new_voxel.weight;
-      // Average the accumulated weight over the eight source voxels.
       new_voxel.weight /= 8;
     }
   }

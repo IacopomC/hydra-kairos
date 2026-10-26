@@ -1,6 +1,5 @@
 #include <config_utilities/config_utilities.h>
 #include <spark_dsg/dynamic_scene_graph.h>
-#include <spark_dsg/dynamic_scene_graph_layer.h>
 #include <spark_dsg/node_attributes.h>
 #include <spark_dsg/scene_graph_types.h>
 #include <spatial_hash/neighbor_utils.h>
@@ -36,18 +35,17 @@ namespace hydra {
 using spatial_hash::IndexSet;
 using SpatialCloud = pcl::PointCloud<pcl::PointXYZ>;
 
-// Return the (eigenvalue, eigenvector) pair for the largest eigenvalue of cov, i.e. the
-// principal axis and the variance along it. Used to pick the direction to split a
-// frontier and as a measure of how elongated it is.
 template <typename T, size_t N>
 std::pair<T, Eigen::Matrix<T, N, 1>> getMaxEigenvector(Eigen::Matrix<T, N, N> cov) {
-  Eigen::EigenSolver<Eigen::Matrix<T, N, N>> es(cov, true);
-  auto evals_complex = es.eigenvalues();
-  Eigen::Matrix<T, N, 1> evals = evals_complex.real();
+  using Solver = Eigen::EigenSolver<Eigen::Matrix<T, N, N>>;
+
+  Solver es(cov, true);
+  const Eigen::Matrix<T, N, 1> evals = es.eigenvalues().real();
+
   Eigen::Index max_idx;
   evals.maxCoeff(&max_idx);
-  auto max_vec_complex = es.eigenvectors().col(max_idx);
-  Eigen::Matrix<T, N, 1> max_vec = max_vec_complex.real();
+
+  const Eigen::Matrix<T, N, 1> max_vec = es.eigenvectors().col(max_idx).real();
   return std::pair(evals(max_idx), max_vec);
 }
 
@@ -80,14 +78,10 @@ bool splitFrontier(const std::vector<Eigen::Vector3f>& positions,
   Eigen::Matrix3f cov;
   centroidAndCovFromPoints(positions, centroid, cov);
 
-  // only split if the spread along the principal axis exceeds the threshold; a compact
-  // blob is left intact
   std::pair<float, Eigen::Vector3f> val_vec = getMaxEigenvector<float, 3>(cov);
   if (val_vec.first < std_threshold) {
     return false;
   }
-  // bisect by the sign of the projection onto the principal axis, i.e. cut with the
-  // plane through the centroid normal to that axis
   for (auto p : positions) {
     auto u = p - centroid;
     auto prod = u.dot(val_vec.second);
@@ -104,17 +98,12 @@ void splitAllFrontiers(std::vector<std::vector<Eigen::Vector3f>>& frontiers,
                        const double std_threshold,
                        const size_t point_threshold,
                        std::vector<std::vector<Eigen::Vector3f>>& finished_frontiers) {
-  // worklist-driven recursive bisection: keep splitting each frontier along its
-  // principal axis until it is either compact enough (spread below threshold) or small
-  // enough (fewer than point_threshold points), at which point it becomes a leaf
   while (frontiers.size() > 0) {
     std::vector<Eigen::Vector3f> frontier = frontiers.back();
     frontiers.pop_back();
     std::vector<Eigen::Vector3f> child1;
     std::vector<Eigen::Vector3f> child2;
     if (splitFrontier(frontier, std_threshold, child1, child2)) {
-      // a child below the point threshold is final; otherwise push it back for further
-      // splitting
       if (child1.size() < point_threshold) {
         finished_frontiers.push_back(child1);
       } else {
@@ -136,8 +125,6 @@ FrontierExtractor::FrontierExtractor(const Config& config)
       next_node_id_(config.prefix, 0),
       map_window_(GlobalInfo::instance().createVolumetricWindow()) {}
 
-// Group the raw frontier voxel centers into spatially connected clusters via Euclidean
-// clustering, returning each cluster as a point list ready to be split further.
 void clusterFrontiers(const SpatialCloud::Ptr cloud,
                       const double cluster_tolerance,
                       const size_t min_cluster_size,
@@ -180,9 +167,6 @@ void clusterFrontiers(const SpatialCloud::Ptr cloud,
   }
 }
 
-// Collect (center, free-space radius) for every place whose sphere can possibly reach
-// into this block. The search radius is the block half-diagonal (block_size * sqrt(2))
-// plus the largest allowed place radius so no overlapping place is missed.
 std::vector<std::pair<Eigen::Vector3d, double>> getPlacesForBlock(
     const DynamicSceneGraph& graph,
     const Eigen::Vector3f& block_center,
@@ -210,8 +194,6 @@ void computeVoxelsInPlace(
     const double voxel_size,
     std::vector<bool>& inside_place,
     std::vector<bool>& inside_archived_place) {
-  // for each voxel in the block, flag whether its center lies within any place's
-  // free-space sphere (active places take priority; archived only checked otherwise)
   for (size_t v = 0; v < voxels_per_block; ++v) {
     VoxelIndex ind = spatial_hash::voxelIndexFromLinearIndex(v, voxels_per_side);
     const Point center =
@@ -224,7 +206,6 @@ void computeVoxelsInPlace(
       }
     }
     inside_archived_place[v] = false;
-    // a voxel already inside an active place need not be tested against archived ones
     if (inside_place[v]) {
       continue;
     }
@@ -243,8 +224,6 @@ void checkFreeNeighbors(const std::vector<bool>& inside_place,
                         const VoxelIndex& index,
                         bool& neighbor_free,
                         bool& neighbor_archived_free) {
-  // scan the 26-connected neighborhood within this block to see if the voxel borders
-  // free space inside a place; skip neighbors that fall outside the block bounds
   const spatial_hash::NeighborSearch search(26);
   for (const auto& neighbor : search.neighborIndices(index)) {
     if (neighbor.array().minCoeff() < 0 || neighbor.array().maxCoeff() >= vps) {
@@ -253,7 +232,6 @@ void checkFreeNeighbors(const std::vector<bool>& inside_place,
     const size_t vn = spatial_hash::linearIndexFromVoxelIndex(neighbor, vps);
     neighbor_free = inside_place[vn];
     neighbor_archived_free |= inside_archived_place[vn];
-    // adjacency to an active place dominates, so stop as soon as one is found
     if (neighbor_free) {
       return;
     }
@@ -274,10 +252,6 @@ void processBlock(NearestNodeFinder& finder,
                   std::queue<BlockIndex>& extra_blocks,
                   SpatialCloud::Ptr cloud,
                   SpatialCloud::Ptr archived_cloud) {
-  // For one TSDF block: mark which voxels lie inside known free space (a place), then
-  // emit as frontier voxels the unobserved voxels that border that free space. Such
-  // voxels sit on the boundary between explored and unexplored space. Frontier voxels
-  // are routed to either the active or archived cloud depending on the place they touch.
   // Get all active places near block
   const Eigen::Vector3f block_center =
       spatial_hash::centerPointFromIndex(block_index, tsdf.blockSize());
@@ -286,7 +260,7 @@ void processBlock(NearestNodeFinder& finder,
   auto center_dists = getPlacesForBlock(
       graph, block_center, finder, tsdf.blockSize(), max_place_radius);
 
-  // TODO: We should probably check to see if the whole block is outside of the
+  // TODO(aaron): We should probably check to see if the whole block is outside of the
   // z band of voxels we are about. Can greatly reduce amount of work.
 
   // Get all recently-archived places near block
@@ -317,7 +291,7 @@ void processBlock(NearestNodeFinder& finder,
 
   // find voxels that are on boundary of unobserved space and space inside a place
   for (size_t v = 0; v < voxels_per_block; ++v) {
-    // a frontier voxel must be unobserved: any nonzero TSDF weight means it was measured
+    // Check the voxel is not observed in the TSDF
     const auto tsdf_block = tsdf.getBlockPtr(block_index);
     if (tsdf_block && tsdf_block->getVoxel(v).weight >= 1e-6) {
       continue;
@@ -337,8 +311,6 @@ void processBlock(NearestNodeFinder& finder,
     // neighboring block is not allocated, need to add neighbor to queue of "extra"
     // blocks
     if (inside_place[v] || inside_archived_place[v]) {
-      // free space can extend past the block edge into an unallocated neighbor block, so
-      // queue those neighbors for processing to catch frontiers straddling the boundary
       const spatial_hash::VoxelNeighborSearch search(tsdf, 6);
       for (const auto& neighbor_key : search.neighborKeys({block_index, voxel_index})) {
         if (!tsdf.hasBlock(neighbor_key.first) &&
@@ -350,11 +322,9 @@ void processBlock(NearestNodeFinder& finder,
       continue;
     }
 
-    // this block was only revisited to satisfy a neighbor; don't emit frontiers from it
     if (skip_adding_frontiers) {
       return;
     }
-    // an unobserved voxel is a frontier only if it is adjacent to free space in a place
     bool neighbor_free = false;
     bool neighbor_archived_free = false;
     checkFreeNeighbors(inside_place,
@@ -414,7 +384,6 @@ void FrontierExtractor::computeSparseFrontiers(const SpatialCloud::Ptr cloud,
                    config.max_cluster_size,
                    frontiers_to_split);
 
-  // break each cluster down into compact pieces along their principal axes
   std::vector<std::vector<Eigen::Vector3f>> finished_frontiers;
   splitAllFrontiers(frontiers_to_split,
                     config.frontier_splitting_threshold,
@@ -422,7 +391,6 @@ void FrontierExtractor::computeSparseFrontiers(const SpatialCloud::Ptr cloud,
                     finished_frontiers);
 
   for (auto f : finished_frontiers) {
-    // drop frontiers too small to be worth representing
     if (f.size() < config.culling_point_threshold) {
       continue;
     }
@@ -434,8 +402,6 @@ void FrontierExtractor::computeSparseFrontiers(const SpatialCloud::Ptr cloud,
     BlockIndex bix = layer.getBlockIndex(centroid);
 
     if (config.compute_frontier_shape) {
-      // summarize the frontier as an oriented ellipsoid: principal axes from the
-      // eigenvectors and per-axis extent from the (scaled) standard deviations
       Eigen::EigenSolver<Eigen::Matrix3f> es(cov, true);
       auto evals_complex = es.eigenvalues();
       Eigen::Vector3f evals = evals_complex.real();
@@ -483,8 +449,6 @@ void FrontierExtractor::detectFrontiers(const ActiveWindowOutput& input,
   }
 
   if (place_finder_) {
-    // first pass over allocated blocks; processBlock may enqueue unallocated neighbor
-    // blocks whose voxels border free space into extra_blocks
     std::queue<BlockIndex> extra_blocks;
     IndexSet processed_extra_blocks;
     for (const auto& idx : tsdf_->allocatedBlockIndices()) {
@@ -504,8 +468,6 @@ void FrontierExtractor::detectFrontiers(const ActiveWindowOutput& input,
                    archived_cloud);
     }
 
-    // second pass: drain the neighbor blocks queued above (this pass may itself enqueue
-    // further neighbors). Frontiers are suppressed for blocks recently archived.
     while (!extra_blocks.empty()) {
       BlockIndex bix = extra_blocks.front();
       extra_blocks.pop();
@@ -528,8 +490,6 @@ void FrontierExtractor::detectFrontiers(const ActiveWindowOutput& input,
     }
   }
 
-  // dense mode keeps one frontier per voxel; sparse mode clusters and splits the voxels
-  // into a smaller set of summarized frontier nodes
   if (config.dense_frontiers) {
     populateDenseFrontiers(cloud, archived_cloud, *tsdf_);
   } else {
@@ -542,8 +502,6 @@ void FrontierExtractor::detectFrontiers(const ActiveWindowOutput& input,
 }
 
 void FrontierExtractor::addFrontiers(uint64_t timestamp_ns, DynamicSceneGraph& graph) {
-  // active frontiers are transient: remove the ones added on the previous call before
-  // inserting the freshly detected set
   for (auto nid_bix : nodes_to_remove_) {
     graph.removeNode(nid_bix.first);
   }
@@ -555,8 +513,6 @@ void FrontierExtractor::addFrontiers(uint64_t timestamp_ns, DynamicSceneGraph& g
 
   // Add non-archived frontiers and save their node ids for removing
   for (auto& frontier : frontiers_) {
-    // attach each frontier to its nearest active place and record the node id so it can
-    // be removed on the next pass
     place_finder_->find(
         frontier.center, 1, false, [&](NodeId place_id, size_t, double) {
           PlaceNodeAttributes::Ptr attrs(new PlaceNodeAttributes(1, 0));
@@ -577,7 +533,7 @@ void FrontierExtractor::addFrontiers(uint64_t timestamp_ns, DynamicSceneGraph& g
     ++next_node_id_;
   }
 
-  // Add archived frontiers (kept in the graph, so their ids are not queued for removal)
+  // Add archived frontiers
   for (auto& frontier : archived_frontiers_) {
     place_finder_->find(
         frontier.center, 1, false, [&](NodeId place_id, size_t, double) {
@@ -601,8 +557,6 @@ void FrontierExtractor::addFrontiers(uint64_t timestamp_ns, DynamicSceneGraph& g
 void FrontierExtractor::updateRecentBlocks(const Eigen::Vector3d& current_pos,
                                            double block_size) {
   if (tsdf_ && map_window_) {
-    // any block that has fallen out of the volumetric window is archived and dropped
-    // from the local tsdf copy; the indices are remembered to tag frontiers as archived
     const Eigen::Isometry3d pose =
         Eigen::Translation3d(current_pos) * Eigen::Quaterniond::Identity();
     for (const auto& block : *tsdf_) {
@@ -616,7 +570,7 @@ void FrontierExtractor::updateRecentBlocks(const Eigen::Vector3d& current_pos,
     }
   }
 
-  // age out remembered archived blocks once the robot has moved far enough away
+  // remove all block indices outside the recent block distance
   auto iter = recently_archived_blocks_.begin();
   while (iter != recently_archived_blocks_.end()) {
     const auto pos = spatial_hash::originPointFromIndex(*iter, block_size);

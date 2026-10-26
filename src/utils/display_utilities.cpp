@@ -37,8 +37,6 @@
 namespace hydra {
 
 std::string getHumanReadableMemoryString(size_t bytes) {
-  // Pick the unit from the magnitude: every 10 bits is one binary order (1024x),
-  // so floor(log2(bytes)) / 10 maps to bytes/KiB/MiB/GiB.
   const size_t log_bytes = static_cast<size_t>(std::floor(std::log2(bytes)));
   const size_t unit_index = log_bytes / 10;
 

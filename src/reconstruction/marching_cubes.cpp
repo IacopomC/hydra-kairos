@@ -59,8 +59,6 @@ std::ostream& operator<<(std::ostream& out, const SdfPoint& point) {
   return out;
 }
 
-// Labels can't be blended, so the edge crossing snaps to whichever corner it is closer
-// to; ties (exact midpoint) go to the more confident (higher weight) corner.
 std::optional<uint32_t> interpLabel(const SdfPoint& v0, const SdfPoint& v1, float t) {
   const auto val = std::abs(t);
   if (std::abs(t) < 0.5f) {
@@ -84,13 +82,10 @@ void MarchingCubes::interpolateEdges(const SdfPoints& points,
                                      EdgePoints& edge_points,
                                      EdgeStatus& edge_status,
                                      float min_sdf_difference) {
-  // Visit each of the 12 cube edges and, where the SDF changes sign across it, locate
-  // the surface crossing point and interpolate its color and label.
   for (size_t i = 0; i < 12; ++i) {
     // clear edge status flags
     edge_status[i] = 0;
 
-    // Look up the two cube corners this edge connects and their SDF values.
     const auto* pairs = MarchingCubes::kEdgeIndexPairs[i];
     const auto edge0 = pairs[0];
     const auto edge1 = pairs[1];
@@ -98,7 +93,6 @@ void MarchingCubes::interpolateEdges(const SdfPoints& points,
     const auto sdf1 = points[edge1].distance;
     auto& edge_point = edge_points[i];
 
-    // The surface only passes through this edge if the two corners straddle zero.
     const bool has_crossing =
         (sdf0 < 0.0f && sdf1 >= 0.0f) || (sdf1 < 0.0f && sdf0 >= 0.0f);
     if (!has_crossing) {
@@ -108,10 +102,9 @@ void MarchingCubes::interpolateEdges(const SdfPoints& points,
     const auto& point0 = points[edge0];
     const auto& point1 = points[edge1];
 
-    // Degenerate case: the two corner SDF values are nearly equal, so the linear root
-    // is ill-conditioned. This corresponds to the surface running almost parallel to
-    // the edge. Fall back to placing the vertex at the edge midpoint.
-    // TODO: this rarely triggers / should never trigger
+    // TODO(nathan): this rarely triggers / should never tigger
+    // this case corresponds to a plane nearly parallel to the face containing the two
+    // corners intersecting at some point through the edge between the two corners.
     const float sdf_diff = sdf0 - sdf1;
     if (std::abs(sdf_diff) <= min_sdf_difference) {
       edge_point.pos = 0.5f * (point0.pos + point1.pos);
@@ -128,8 +121,7 @@ void MarchingCubes::interpolateEdges(const SdfPoints& points,
       continue;
     }
 
-    // Fractional position of the zero crossing along the edge; t in [0, 1] since the
-    // root lies between the two corners. Interpolate the vertex and its attributes.
+    // t \in [-1, 1] (as 0 \in [sdf0, sdf1])
     const float t = sdf0 / sdf_diff;
     edge_point.pos = point0.pos + t * (point1.pos - point0.pos);
     edge_point.color = interpColor(point0, point1, t);
@@ -139,8 +131,6 @@ void MarchingCubes::interpolateEdges(const SdfPoints& points,
              << ", v1=" << point1.pos.transpose()
              << ", coord: " << edge_point.pos.transpose();
 
-    // Record which corner(s) own this crossing: the near half (bit 0) and/or the far
-    // half (bit 1), so each corner voxel can later be tagged with the nearest vertex.
     if (std::abs(t) <= 0.5) {
       edge_status[i] |= 0x01;
     }
@@ -151,10 +141,9 @@ void MarchingCubes::interpolateEdges(const SdfPoints& points,
   }
 }
 
-// Pack the inside/outside sign of the eight corner SDF values into an 8-bit index. A
-// corner counts as inside when its distance is strictly negative, which keeps exactly
-// zero values (common on mesh boundaries) on the outside.
 inline int calculateVertexConfig(const MarchingCubes::SdfPoints& points) {
+  // voxblox / open-chisel version doesn't handle zeroed SDF values correctly
+  // on mesh boundaries
   int to_return = 0;
   to_return |= (points[0].distance < 0.0) ? 0x01 : 0;
   to_return |= (points[1].distance < 0.0) ? 0x02 : 0;
@@ -167,9 +156,6 @@ inline int calculateVertexConfig(const MarchingCubes::SdfPoints& points) {
   return to_return;
 }
 
-// Tag the corner voxel(s) of an edge with the mesh vertex generated on that edge, so
-// later stages can map voxels to their nearest surface vertex. Which corner gets tagged
-// depends on which half of the edge the crossing fell on (per the edge status bits).
 inline void updateVoxels(const BlockIndex& block,
                          int edge_coord,
                          size_t new_vertex_index,
@@ -200,8 +186,6 @@ inline void updateVoxels(const BlockIndex& block,
   }
 }
 
-// Append first/last observed timestamps for a new mesh vertex, derived from the
-// tracking voxels at the two corners of the edge the vertex sits on.
 inline void addStamps(Mesh& mesh,
                       int edge_coord,
                       const MarchingCubes::SdfPoints& points) {
@@ -212,11 +196,9 @@ inline void addStamps(Mesh& mesh,
   auto& first_seen = mesh.first_seen_stamps.emplace_back();
   auto& last_seen = mesh.stamps.emplace_back();
   if (!first_voxel || !second_voxel) {
-    // Missing tracking info; emit neutral stamps rather than reading uninitialized data.
     first_seen = 0;
     last_seen = 0;
   } else {
-    // Span the full observation window of both corners.
     first_seen = std::min(first_voxel->first_observed, second_voxel->first_observed);
     last_seen = std::max(first_voxel->last_observed, second_voxel->last_observed);
   }
@@ -233,29 +215,23 @@ void MarchingCubes::meshCube(const BlockIndex& block,
     }
   }
 
-  // Pack the eight corner inside/outside signs into an 8-bit cube configuration index.
   const int index = calculateVertexConfig(points);
   VLOG(15) << "[mesh] vertex sdf index: " << index;
 
   if (index == 0) {
-    return;  // all corners on the same side: no surface crossing in this cube
+    return;  // no surface crossing in sdf cube
   }
 
-  // Compute the surface crossing point on every edge that has one.
-  // TODO: augment edge points
+  // TODO(nathan) augment edge points
   EdgePoints edge_points;
   EdgeStatus status;
   interpolateEdges(points, edge_points, status);
 
-  // The triangle table lists, per configuration, the edges whose crossing points form
-  // each output triangle, terminated by -1.
   const int* table_row = MarchingCubes::kTriangleTable[index];
 
   int table_col = 0;
   uint32_t next_index = mesh.numVertices();
   while (table_row[table_col] != -1) {
-    // Pull the three edge crossing points for this triangle. The corner order is
-    // reversed (col+2, col+1, col) so the emitted face winds consistently.
     const auto& v1 = edge_points[table_row[table_col + 2]];
     const auto& v2 = edge_points[table_row[table_col + 1]];
     const auto& v3 = edge_points[table_row[table_col]];
@@ -272,14 +248,15 @@ void MarchingCubes::meshCube(const BlockIndex& block,
       mesh.labels.push_back(v3.label.value_or(std::numeric_limits<uint32_t>::max()));
     }
     if (mesh.has_timestamps && mesh.has_first_seen_stamps) {
-      // TODO: this could use the point interpolation as well
+      // TODO(nathan) this is kinda janky and could use the point interpolation as well,
+      // but that's more than I want to touch at the moment
       addStamps(mesh, table_row[table_col + 2], points);
       addStamps(mesh, table_row[table_col + 1], points);
       addStamps(mesh, table_row[table_col], points);
     }
 
     if (compute_normals) {
-      // NOTE: the mesh representation currently has no normals, so this is disabled.
+      // NOTE(lschmid): Spark DSG meshes currently don't have normals, disabled for now.
       /*
       const auto& p0 = mesh.vertices[next_index];
       const auto& p1 = mesh.vertices[next_index + 1];
@@ -302,8 +279,10 @@ void MarchingCubes::meshCube(const BlockIndex& block,
   }
 }
 
-// Lookup table from the 256 possible cube configurations to up to five triplets giving
-// the edges on which the triangle vertices lie, each row terminated by -1.
+// Lookup table from the 256 possible cube configurations from
+// CalculateVertexConfigurationIndex() to the 0-5 triplets the give the edges where the
+// triangle vertices lie. Implementation taken from Open Chisel
+// https://github.com/personalrobotics/OpenChisel
 const int MarchingCubes::kTriangleTable[256][16] = {
     {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
     {0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1},

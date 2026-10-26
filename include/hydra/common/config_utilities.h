@@ -33,66 +33,17 @@
  * purposes notwithstanding any copyright notation herein.
  * -------------------------------------------------------------------------- */
 #pragma once
-#include <spark_dsg/scene_graph_types.h>
-
 #include <Eigen/Geometry>
 #include <map>
 #include <string>
 
-/**
- * @file config_utilities.h
- * @brief Conversion traits used when (de)serializing config values. Layer-keyed
- *        maps are exchanged through their human-readable layer names, and
- *        quaternions through a string-keyed map of components.
- */
-
 namespace hydra {
 
-/// @brief Converts a map keyed by layer id to and from one keyed by layer name.
-/// Serializes through string layer names so configs stay human-readable.
-/// @tparam T Mapped value type.
-template <typename T>
-struct LayerMapConversion {
-  using TargetMap = std::map<std::string, T>;  ///< Serialized form keyed by layer name.
-  using SourceMap = std::map<spark_dsg::LayerId, T>;  ///< In-memory form keyed by layer id.
-
-  /// @brief Convert the layer-id map into a layer-name map for serialization.
-  /// @param other Source map keyed by layer id.
-  /// @return Map keyed by layer name.
-  static TargetMap toIntermediate(const SourceMap& other, std::string&) {
-    TargetMap to_return;
-    for (const auto& kv_pair : other) {
-      to_return[spark_dsg::DsgLayers::LayerIdToString(kv_pair.first)] = kv_pair.second;
-    }
-
-    return to_return;
-  }
-
-  /// @brief Rebuild the layer-id map from a serialized layer-name map.
-  /// @param other Source map keyed by layer name.
-  /// @param value Output map keyed by layer id; cleared before populating.
-  static void fromIntermediate(const TargetMap& other, SourceMap& value, std::string&) {
-    value.clear();
-    for (const auto& kv_pair : other) {
-      value[spark_dsg::DsgLayers::StringToLayerId(kv_pair.first)] = kv_pair.second;
-    }
-  }
-};
-
-/// @brief Converts a quaternion to and from a string-keyed map of its components.
 struct QuaternionConverter {
-  using DoubleMap = std::map<std::string, double>;  ///< Component map keyed by name.
+  using DoubleMap = std::map<std::string, double>;
 
-  /// @brief Convert a quaternion into a map of named components for serialization.
-  /// @param other Quaternion to serialize.
-  /// @param error Set with a description if conversion fails.
-  /// @return Map of quaternion components keyed by name.
   static DoubleMap toIntermediate(const Eigen::Quaterniond& other, std::string& error);
 
-  /// @brief Rebuild a quaternion from a map of named components.
-  /// @param other Component map keyed by name.
-  /// @param value Output quaternion.
-  /// @param error Set with a description if conversion fails.
   static void fromIntermediate(const DoubleMap& other,
                                Eigen::Quaterniond& value,
                                std::string& error);

@@ -34,44 +34,36 @@
  * -------------------------------------------------------------------------- */
 #pragma once
 #include <pose_graph_tools/pose_graph.h>
+#include <spark_dsg/dynamic_scene_graph.h>
 
 #include <Eigen/Geometry>
 #include <list>
 #include <memory>
-
-/**
- * @file pose_graph_tracker.h
- * @brief Interface for turning a stream of body poses into pose-graph
- *        increments, plus the packet of increments and priors it produces.
- */
+#include <optional>
 
 namespace hydra {
 
-/// @brief Pose-graph increments for one update, consumed by the backend.
 struct PoseGraphPacket {
   using Ptr = std::shared_ptr<PoseGraphPacket>;
-  uint64_t timestamp_ns;  ///< Timestamp of this update (ns).
-  std::vector<pose_graph_tools::PoseGraph> pose_graphs;  ///< New pose-graph segments (nodes and odometry edges).
-  pose_graph_tools::PoseGraph::ConstPtr external_priors;  ///< Optional priors from an external optimizer.
+  //! current update
+  uint64_t timestamp_ns;
+  //! pose graph updates
+  std::vector<pose_graph_tools::PoseGraph> pose_graphs;
+  //! external optimization priors
+  pose_graph_tools::PoseGraph::ConstPtr external_priors;
 
-  /// @brief Merge another packet into this one (append segments, take its timestamp and priors).
-  void updateFrom(const PoseGraphPacket& other) {
-    timestamp_ns = other.timestamp_ns;
-    pose_graphs.insert(pose_graphs.end(), other.pose_graphs.begin(), other.pose_graphs.end());
-    // TODO(nathan) this is technically bad, but we'll get to it
-    external_priors = other.external_priors;
-  }
+  //! @brief Merge two update packets
+  void updateFrom(const PoseGraphPacket& other);
+
+  //! @brief Add all pose graph nodes and edges to graph
+  std::vector<spark_dsg::NodeId> addToGraph(
+      spark_dsg::DynamicSceneGraph& graph,
+      std::optional<int> robot_id = std::nullopt) const;
 };
 
-/// @brief Base class that maps incoming body poses to PoseGraphPackets.
 struct PoseGraphTracker {
   using Ptr = std::unique_ptr<PoseGraphTracker>;
   virtual ~PoseGraphTracker() = default;
-
-  /// @brief Ingest a body pose at a timestamp and return any resulting pose-graph increment.
-  /// @param timestamp_ns Pose timestamp (ns).
-  /// @param world_T_body Body pose in the world frame.
-  /// @return Packet of new pose-graph segments (possibly empty if the pose was dropped).
   virtual PoseGraphPacket update(uint64_t timestamp_ns,
                                  const Eigen::Isometry3d& world_T_body) = 0;
 };

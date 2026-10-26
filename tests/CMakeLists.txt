@@ -11,10 +11,15 @@ add_executable(
   main.cpp
   src/resources.cpp
   src/place_fixtures.cpp
+  backend/test_dsg_updater.cpp
+  backend/test_external_loop_closure.cpp
+  backend/test_merge_tracker.cpp
   backend/test_update_agents_functor.cpp
   backend/test_update_objects_functor.cpp
   backend/test_update_places_functor.cpp
   backend/test_update_buildings_functor.cpp
+  common/test_hydra_pipeline.cpp
+  common/test_shared_dsg_info.cpp
   common/test_config_utilities.cpp
   input/test_camera.cpp
   input/test_input_packet.cpp
@@ -30,13 +35,13 @@ add_executable(
   loop_closure/test_subgraph_extraction.cpp
   odometry/test_pose_graph_from_odom.cpp
   openset/test_embedding_distances.cpp
-  places/test_compression_graph_extractor.cpp
-  places/test_floodfill_graph_extractor.cpp
+  places/test_graph_extractor.cpp
   places/test_graph_extractor_utilities.cpp
   places/test_gvd_integrator.cpp
   places/test_gvd_utilities.cpp
-  places/test_voxel_templates.cpp
+  reconstruction/test_integration_masking.cpp
   reconstruction/test_marching_cubes.cpp
+  reconstruction/test_projection_interpolators.cpp
   reconstruction/test_semantic_integrator.cpp
   reconstruction/test_tsdf_interpolators.cpp
   reconstruction/test_volumetric_map.cpp
